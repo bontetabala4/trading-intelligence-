@@ -1,0 +1,36 @@
+{
+  "baseline_id": "ATIP-BL-EURUSD-M15-2025-01",
+  "dataset_identifier": "EURUSD_M15_2022_2025",
+  "dataset_path": "data/raw/EURUSD_M15_2022_2025.csv",
+  "dataset_sha256": "bcd8347f1440af3acf0afdeb63a3d350d36152ca5368838f86eecddb0b104823",
+  "symbol": "EURUSD",
+  "timeframe": "M15",
+  "timezone": "UTC",
+  "warmup_bars": 50,
+  "initial_capital": 10000.0,
+  "risk_per_trade_pct": 1.0,
+  "entry_rule": "Market_At_Close_Of_Signal_Bar",
+  "stop_loss_rule": "Structure_Or_ATR_Dynamic",
+  "target_rule": "Fixed_RR_2.0_Or_Regime_Exit",
+  "ambiguous_bar_policy": "Pessimistic_StopLoss_First",
+  "cost_model": {
+    "name": "BASE_COST",
+    "spread_pips": 1.0,
+    "slippage_pips": 0.2,
+    "commission_usd_per_lot": 7.0,
+    "pip_size": 0.0001
+  },
+  "is_period": {
+    "start": "2022-01-03T00:00:00+00:00",
+    "end": "2023-12-31T23:45:00+00:00"
+  },
+  "oos_period": {
+    "start": "2024-01-01T00:00:00+00:00",
+    "end": "2025-01-31T23:45:00+00:00"
+  },
+  "versions": {
+    "backtest_engine_version": "1.0.0",
+    "signal_engine_version": "1.0.0",
+    "config_version": "1.0.0"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "dataset_path": "data/raw/EURUSD_M15_2022_2025.csv",
+  "dataset_sha256": "bcd8347f1440af3acf0afdeb63a3d350d36152ca5368838f86eecddb0b104823",
+  "start_date": "2022-01-03 00:00:00+00:00",
+  "end_date": "2025-01-31 23:45:00+00:00"
+}
