@@ -55,13 +55,20 @@ class BacktestRunner:
                 continue
 
             # 3. Process ATIP Pipeline at T (strictly history_slice)
-            if self.signal_engine is not None and hasattr(self.signal_engine, "process_bar"):
-                signal = self.signal_engine.process_bar(
-                    current_bar=current_bar,
-                    history=history_slice,
+            #
+            # SignalEngine.process(history, symbol, timeframe) renvoie un
+            # dict {"signal": str, "regime": str, "score": float,
+            # "risk_levels": {...}, "final_signal": FinalSignal}. Le reste
+            # de cette boucle (VirtualOutcomeEngine, MetricsCalculator)
+            # attend un objet FinalSignal, donc on extrait explicitement
+            # result["final_signal"] plutôt que le dict brut.
+            if self.signal_engine is not None:
+                result = self.signal_engine.process(
+                    history_slice,
                     symbol=self.config.symbol,
                     timeframe=self.config.timeframe,
                 )
+                signal = result["final_signal"]
             else:
                 bar_ts = getattr(current_bar, "timestamp", datetime.now(timezone.utc))
                 signal = FinalSignal(
