@@ -5,10 +5,11 @@ Ce module agrège les résultats d'opportunités, de risques et de qualité de d
 pour générer des candidats de signaux et des signaux analytiques finaux déterministes.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
 import uuid
+import pandas as pd
 
 from core.opportunity.models import OpportunityDirection, OpportunityResult, ValidationStatus
 from core.signal.domain import (
@@ -25,6 +26,172 @@ logger = logging.getLogger("atip.signal_engine")
 class SignalEngine:
     def __init__(self, signal_version: str = "1.0.0"):
         self.signal_version = signal_version
+
+    def process(
+        self,
+        history: Any,
+        symbol: str = "EURUSD",
+        timeframe: str = "M15"
+    ) -> Dict[str, Any]:
+        """
+        Orchestration complète du pipeline canonique ATIP à partir d'une tranche d'historique <= T :
+        Features -> Market Regime -> Strategy Selector -> Opportunity Engine -> Risk Engine -> Final Signal.
+        """
+        if not isinstance(history, pd.DataFrame) or len(history) < 2:
+            return {
+                "signal": "NO_TRADE",
+                "regime": "UNCERTAIN",
+                "score": 0.0,
+                "risk_levels": {"stop_price": None, "target_price": None}
+            }
+
+        close = history["close"]
+        high = history["high"]
+        low = history["low"]
+        last_close = float(close.iloc[-1])
+
+        # 1. Calcul strict sans look-ahead des indicateurs techniques
+        ema_20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1]) if len(close) >= 20 else last_close
+        ema_50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1]) if len(close) >= 50 else last_close
+
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs()
+        ], axis=1).max(axis=1)
+        atr_14 = float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else 0.0015
+        if pd.isna(atr_14) or atr_14 <= 0:
+            atr_14 = 0.0015
+        true_range = float(tr.iloc[-1]) if not pd.isna(tr.iloc[-1]) else atr_14
+
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = float(gain.rolling(14).mean().iloc[-1]) if len(delta) >= 14 else 0.0
+        avg_loss = float(loss.rolling(14).mean().iloc[-1]) if len(delta) >= 14 else 0.0
+        if pd.isna(avg_gain) or pd.isna(avg_loss) or (avg_gain + avg_loss) == 0:
+            rsi_14 = 50.0
+        else:
+            rs = avg_gain / (avg_loss + 1e-9)
+            rsi_14 = float(100.0 - (100.0 / (1.0 + rs)))
+
+        ts = history["timestamp"].iloc[-1] if "timestamp" in history.columns else datetime.now(timezone.utc)
+        if hasattr(ts, "to_pydatetime"):
+            ts = ts.to_pydatetime()
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        elif not hasattr(ts, "tzinfo"):
+            ts = datetime.now(timezone.utc)
+
+        features = {
+            "ema_20": ema_20,
+            "ema_50": ema_50,
+            "rsi_14": rsi_14,
+            "atr_14": atr_14,
+            "true_range": true_range,
+            "close": last_close,
+        }
+
+        # 2. Market Regime Engine
+        from core.regime.services.engine import MarketRegimeEngine
+        regime_engine = MarketRegimeEngine()
+        regime = regime_engine.evaluate(symbol, timeframe, ts, features, data_quality="VALID")
+        regime_str = regime.regime.value
+
+        # 3. Strategy Selector & Evaluation
+        from core.strategy.services.StrategyEngine import StrategyEngine
+        strategy_engine = StrategyEngine()
+        strategy_signals = strategy_engine.evaluate_all(regime, features)
+
+        active_strat = strategy_signals[0].strategy_id if strategy_signals else "Trend Following"
+        strat_sig = strategy_signals[0].signal.value if strategy_signals else "HOLD"
+        is_compat = len(strategy_signals) > 0
+
+        # 4. Opportunity Engine
+        from core.opportunity.detector import OpportunityDetector
+        from core.opportunity.quantifier import OpportunityQuantifier
+        from core.opportunity.validator import OpportunityValidator
+
+        opp_detector = OpportunityDetector()
+        opp_quantifier = OpportunityQuantifier()
+        opp_validator = OpportunityValidator()
+
+        opp = opp_detector.detect(
+            symbol=symbol,
+            asset_class="FOREX",
+            timeframe=timeframe,
+            timestamp=ts,
+            market_regime=regime_str,
+            strategy_name=active_strat,
+            strategy_evaluation={"is_compatible": is_compat, "signal": strat_sig},
+            features=features,
+            data_quality_score=1.0,
+        )
+
+        opp_result = None
+        if opp is not None:
+            opp_score = opp_quantifier.quantify(opp)
+            opp_result = opp_validator.validate(opp, opp_score)
+
+        # 5. Risk Engine
+        from core.risk.services.engine import RiskEngine
+        from core.risk.domain.models import AccountState
+
+        risk_engine = RiskEngine()
+        account_state = AccountState(
+            account_id="ACC_PAPER",
+            balance=10000.0,
+            equity=10000.0,
+            used_margin=0.0,
+            free_margin=10000.0,
+            current_daily_drawdown=0.0,
+            max_daily_drawdown_limit=500.0,
+            max_open_positions=5,
+            current_open_positions=0,
+            active_positions=[],
+            closed_trades_today=[]
+        )
+
+        strat_model_signal = strategy_signals[0] if strategy_signals else None
+        risk_proposal = None
+        if strat_model_signal and strat_model_signal.signal.value in ("BUY", "SELL"):
+            risk_proposal = risk_engine.evaluate_signal(strat_model_signal, account_state, last_close)
+
+        # 6. Final Signal Engine (5 Gates)
+        proposed_dir = strat_sig if strat_sig in ("BUY", "SELL") else None
+        final_sig = self.generate_signal(
+            symbol=symbol,
+            asset_class="FOREX",
+            timeframe=timeframe,
+            timestamp=ts,
+            data_quality_status="VALID",
+            market_regime=regime_str,
+            strategy_name=active_strat,
+            is_strategy_compatible=is_compat,
+            opportunity_result=opp_result,
+            risk_proposal=risk_proposal,
+            proposed_direction=proposed_dir
+        )
+
+        stop_price = getattr(risk_proposal, "stop_loss", None) if risk_proposal else None
+        target_price = getattr(risk_proposal, "take_profit", None) if risk_proposal else None
+
+        return {
+            "signal": final_sig.direction.value,
+            "regime": regime_str,
+            "score": final_sig.opportunity_score,
+            "risk_levels": {
+                "stop_price": stop_price,
+                "target_price": target_price,
+            },
+            "final_signal": final_sig,
+        }
+
+    def process_bar(self, *args, **kwargs) -> Any:
+        return self.process(*args, **kwargs)
+
+    def evaluate(self, *args, **kwargs) -> Any:
+        return self.process(*args, **kwargs)
 
     # --------------------------------------------------------------------------
     # 1. Traitement Direct d'une Opportunité (Conversion Opportunité -> SignalCandidate)
