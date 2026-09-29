@@ -18,7 +18,7 @@ from core.market.selection import AssetClass
 from core.pipeline import ATIPPipeline, MarketSnapshot, PipelineResult
 from database.models import DecisionRecord
 from database.repositories.decision_repository import DecisionRecordRepository
-
+from pydantic import BaseModel
 
 class DecisionServiceError(RuntimeError):
     """Impossible de produire une décision (broker, données, etc.)."""
