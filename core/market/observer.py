@@ -38,7 +38,11 @@ class MarketObserver:
         if not symbol_info.exists:
             raise MarketObserverError(f"Le symbole '{symbol}' n'existe pas chez ce broker.")
 
-        bars = self._broker.get_ohlcv(symbol, timeframe, count=lookback)
+        bars = self._broker.get_closed_ohlcv(
+            symbol,
+            timeframe,
+            count=lookback,
+        )
         if not bars:
             raise MarketObserverError(f"Aucune donnée disponible pour {symbol}/{timeframe.value}.")
 
@@ -51,13 +55,12 @@ class MarketObserver:
             asset_class=asset_class,
             timeframe=timeframe,
             timestamp=latest.timestamp,
-            open=latest.open,
-            high=latest.high,
-            low=latest.low,
-            close=latest.close,
-            volume=latest.volume,
-            spread=latest.spread,
-            data_quality=quality_report,
+            bars=tuple(
+                sorted(
+                    bars,
+                    key=lambda bar: bar.timestamp,
+                )
+            ),
         )
 
         logger.info(

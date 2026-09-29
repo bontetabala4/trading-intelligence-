@@ -1,19 +1,7 @@
-"""
-Forward Paper Runner
 
-Utilise EXACTEMENT le même ATIPPipeline que le BacktestRunner.
-
-Différence uniquement sur la source des données :
-- Backtest = historique
-- Forward = nouvelles bougies
-
-La logique de décision ne doit jamais être dupliquée.
-"""
-
-from core.pipeline import (
-    ATIPPipeline,
-    MarketSnapshot,
-)
+from core.pipeline import ATIPPipeline
+from core.market.snapshot import MarketSnapshot
+from core.market.selection import AssetClass
 
 from brokers.base.interface import (
     OHLCVBar,
@@ -33,15 +21,10 @@ class ForwardPaperRunner:
     def process_snapshot(
         self,
         symbol: str,
-        asset_class: str,
+        asset_class: AssetClass,
         timeframe: Timeframe,
         bars: list[OHLCVBar],
     ):
-        """
-        Traite une observation Forward.
-
-        Le dernier bar représente T.
-        """
 
         if not bars:
             raise ValueError(

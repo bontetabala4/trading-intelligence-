@@ -58,17 +58,10 @@ from core.risk.domain.models import (
     AccountState,
 )
 
+from core.market.snapshot import MarketSnapshot
 
 @dataclass(frozen=True)
 class MarketSnapshot:
-    """
-    Snapshot immuable utilisé par tous les modes d'exécution.
-
-    Les bars doivent être <= timestamp.
-
-    Cette contrainte est fondamentale pour empêcher le look-ahead.
-    """
-
     symbol: str
     asset_class: str
     timeframe: Timeframe
@@ -122,7 +115,6 @@ class MarketSnapshot:
                 "La dernière bougie doit correspondre exactement "
                 "au timestamp du snapshot."
             )
-
 
 @dataclass(frozen=True)
 class PipelineResult:
@@ -214,15 +206,8 @@ class ATIPPipeline:
     def process(
         self,
         snapshot: MarketSnapshot,
+        symbol_info=None,
     ) -> PipelineResult:
-        """
-        Exécute le pipeline complet pour un instant T.
-
-        Cette méthode doit être utilisée par :
-        - Backtest
-        - Forward
-        - Paper Trading
-        """
 
         # ==============================================================
         # 1. DATA QUALITY
@@ -417,6 +402,7 @@ class ATIPPipeline:
                 current_price=current_price,
                 current_spread_pips=1.0,
                 evaluation_timestamp=snapshot.timestamp,
+                symbol_info=symbol_info,
             )
 
         # ==============================================================

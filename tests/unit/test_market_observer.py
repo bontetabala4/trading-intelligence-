@@ -11,8 +11,9 @@ def test_build_snapshot_returns_valid_snapshot(market_observer):
     snapshot = market_observer.build_snapshot("XAUUSD", AssetClass.METALS, Timeframe.M15)
     assert snapshot.symbol == "XAUUSD"
     assert snapshot.asset_class == AssetClass.METALS
-    assert snapshot.close > 0
-    assert snapshot.data_quality is not None
+    assert snapshot.bars[-1].close > 0
+    assert len(snapshot.bars) > 0
+    assert snapshot.bars[-1].timestamp == snapshot.timestamp
 
 
 def test_build_snapshot_unknown_symbol_raises(market_observer):

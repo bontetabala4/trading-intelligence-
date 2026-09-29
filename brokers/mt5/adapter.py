@@ -183,6 +183,27 @@ class MT5Adapter(BrokerInterface):
             )
         return [self._bar_from_rate(r) for r in rates]
 
+    def get_closed_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        count: int = 500,
+    ) -> list[OHLCVBar]:
+        mt5 = _load_mt5()
+
+        _build_timeframe_map()
+        mt5_tf = _TF_MAP[timeframe]
+
+        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
+        if rates is None:
+            error = mt5.last_error()
+            raise BrokerConnectionError(
+                f"copy_rates_from_pos (closed bars) a échoué "
+                f"pour {symbol}/{timeframe.value} : {error}"
+            )
+
+        return [self._bar_from_rate(r) for r in rates]
+
     def get_ohlcv_range(
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[OHLCVBar]:

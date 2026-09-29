@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from brokers.base.interface import BrokerInterface, Timeframe
 from configs.settings import Settings, get_settings
 from core.market.selection import AssetClass
-from core.pipeline import ATIPPipeline, MarketSnapshot, PipelineResult
+from core.pipeline import ATIPPipeline, PipelineResult
+from core.market.snapshot import MarketSnapshot
 from database.models import DecisionRecord
 from database.repositories.decision_repository import DecisionRecordRepository
 from pydantic import BaseModel
@@ -40,7 +41,11 @@ def build_pipeline_snapshot(
     if not info.exists:
         raise DecisionServiceError(f"Symbole inconnu chez le broker : {symbol}")
 
-    bars = broker.get_ohlcv(symbol.upper(), timeframe, count=lookback)
+    bars = broker.get_closed_ohlcv(
+        symbol.upper(),
+        timeframe,
+        count=lookback,
+    )
     if not bars:
         raise DecisionServiceError(
             f"Aucune bougie pour {symbol}/{timeframe.value}."
@@ -51,7 +56,7 @@ def build_pipeline_snapshot(
 
     return MarketSnapshot(
         symbol=symbol.upper(),
-        asset_class=asset_class.value,
+        asset_class=asset_class,
         timeframe=timeframe,
         timestamp=timestamp,
         bars=ordered,

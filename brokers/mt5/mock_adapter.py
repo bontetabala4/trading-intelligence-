@@ -113,6 +113,18 @@ class MockMT5Adapter(BrokerInterface):
 
         return bars
 
+    def get_closed_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        count: int = 500,
+    ) -> list[OHLCVBar]:
+        return self.get_ohlcv(
+            symbol,
+            timeframe,
+            count=count,
+        )
+
     def get_ohlcv_range(
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[OHLCVBar]:

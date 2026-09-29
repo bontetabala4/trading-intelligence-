@@ -144,6 +144,17 @@ class BrokerInterface(ABC):
         """Récupère les N dernières bougies OHLCV pour un symbole/timeframe."""
 
     @abstractmethod
+    def get_closed_ohlcv(
+        self, symbol: str, timeframe: Timeframe, count: int = 500
+    ) -> list[OHLCVBar]:
+        """
+        Récupère les N dernières bougies entièrement clôturées.
+
+        Cette méthode est destinée à l'analyse temps réel afin d'éviter
+        d'utiliser la bougie actuellement en formation.
+        """
+
+    @abstractmethod
     def get_ohlcv_range(
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[OHLCVBar]:
