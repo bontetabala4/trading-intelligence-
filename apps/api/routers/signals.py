@@ -2,13 +2,13 @@ from fastapi import APIRouter, Query
 from datetime import datetime, timezone
 from typing import List
 from core.regime.services.engine import MarketRegimeEngine
-from core.strategy.services.StrategyEngine import SignalEngine
+from core.strategy.services.StrategyEngine import StrategyEngine
 from core.strategy.domain.models import StrategySignal
 
 router = APIRouter(prefix="/signals", tags=["Trading Signals"])
 
 regime_engine = MarketRegimeEngine()
-signal_engine = SignalEngine()
+strategy_engine = StrategyEngine()
 
 @router.get("/{symbol}", response_model=List[StrategySignal])
 async def get_signals(
@@ -32,4 +32,4 @@ async def get_signals(
         data_quality="VALID"
     )
 
-    return signal_engine.evaluate_all(regime, fake_features)
+    return strategy_engine.evaluate_all(regime, fake_features)

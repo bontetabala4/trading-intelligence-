@@ -1,121 +1,306 @@
-"""
-Backtest Runner — Orchestrates Dataset Replay, Pipeline Execution & Virtual Outcome.
-"""
+
 from datetime import datetime, timezone
-from typing import List
-from typing import List, Optional
+from typing import Any, List, Optional
+
+from brokers.base.interface import OHLCVBar, Timeframe
 
 from core.backtest.clock import SimulationClock
 from core.backtest.dataset_validator import DatasetValidator
-from core.backtest.domain import BacktestConfig, BacktestResult, VirtualTrade
+from core.backtest.domain import (
+    BacktestConfig,
+    BacktestResult,
+    VirtualTrade,
+)
 from core.backtest.metrics import MetricsCalculator
 from core.backtest.replay_engine import HistoricalReplayEngine
 from core.backtest.virtual_outcome import VirtualOutcomeEngine
-from core.features.domain.ohlcv_series import OHLCVSeries
-from core.signal.domain import FinalSignal, FinalSignalDirection, NoTradeReason
-from core.signal.signal_engine import SignalEngine
+
+from core.pipeline import (
+    ATIPPipeline,
+    MarketSnapshot,
+)
 
 
 class BacktestRunner:
-    def __init__(self, config: BacktestConfig, signal_engine: SignalEngine):
+    """
+    Exécute un backtest historique avec le pipeline ATIP canonique.
+
+    IMPORTANT :
+    Le signal_engine historique est conservé uniquement dans la
+    signature pour compatibilité avec d'anciens appelants.
+
+    Il n'est volontairement plus utilisé pour prendre une décision.
+    """
+
+    def __init__(
+        self,
+        config: BacktestConfig,
+        signal_engine: Any = None,
+        pipeline: Optional[ATIPPipeline] = None,
+    ) -> None:
+
         self.config = config
+
+        # Pipeline canonique unique.
+        self.pipeline = pipeline or ATIPPipeline()
+
+        # Compatibilité legacy uniquement.
+        # Aucun appel à cet objet ne doit être effectué.
         self.signal_engine = signal_engine
+
         self.clock = SimulationClock()
 
-    def run(self, bars: List[OHLCVSeries], config: Optional[BacktestConfig] = None) -> BacktestResult:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_timeframe(value: Any) -> Timeframe:
+        """
+        Convertit la configuration timeframe vers l'enum canonique.
+        """
+
+        if isinstance(value, Timeframe):
+            return value
+
+        if isinstance(value, str):
+            try:
+                return Timeframe(value)
+            except ValueError:
+                try:
+                    return Timeframe[value]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Timeframe invalide : {value!r}"
+                    ) from exc
+
+        raise TypeError(
+            f"Timeframe non supporté : {type(value).__name__}"
+        )
+
+    @staticmethod
+    def _normalize_bars(bars: Any) -> list[OHLCVBar]:
+        """
+        Normalise les différentes sources historiques vers une liste
+        d'OHLCVBar.
+
+        Supporte :
+        - list[OHLCVBar]
+        - tuple[OHLCVBar]
+        - pandas.DataFrame
+        """
+
+        if hasattr(bars, "to_dict") and hasattr(bars, "columns"):
+            records = bars.to_dict("records")
+
+            normalized: list[OHLCVBar] = []
+
+            for row in records:
+                normalized.append(
+                    OHLCVBar(
+                        timestamp=row["timestamp"],
+                        open=float(row["open"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        close=float(row["close"]),
+                        volume=float(row.get("volume", 0.0)),
+                        spread=float(row.get("spread", 0.0)),
+                        tick_volume=int(
+                            row.get(
+                                "tick_volume",
+                                row.get("volume", 0),
+                            )
+                        ),
+                        real_volume=int(
+                            row.get(
+                                "real_volume",
+                                row.get("volume", 0),
+                            )
+                        ),
+                    )
+                )
+
+            return normalized
+
+        normalized = list(bars)
+
+        if not normalized:
+            return []
+
+        for index, bar in enumerate(normalized):
+            if not isinstance(bar, OHLCVBar):
+                raise TypeError(
+                    "BacktestRunner attend des OHLCVBar. "
+                    f"Élément {index} = "
+                    f"{type(bar).__name__}"
+                )
+
+        return normalized
+
+    # ------------------------------------------------------------------
+    # Main Backtest
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        bars: Any,
+        config: Optional[BacktestConfig] = None,
+    ) -> BacktestResult:
+
         if config is not None:
             self.config = config
 
-        valid, errors = DatasetValidator.validate(bars, self.config.symbol, self.config.timeframe)
-        if not valid:
-            raise ValueError(f"Invalid dataset: {', '.join(errors)}")
+        normalized_bars = self._normalize_bars(bars)
 
-        replay = HistoricalReplayEngine(bars, self.clock)
-        signals: List[FinalSignal] = []
+        if not normalized_bars:
+            raise ValueError(
+                "Le dataset de backtest ne peut pas être vide."
+            )
+
+        # Validation du dataset historique.
+        valid, errors = DatasetValidator.validate(
+            normalized_bars,
+            self.config.symbol,
+            self.config.timeframe,
+        )
+
+        if not valid:
+            raise ValueError(
+                f"Invalid dataset: {', '.join(errors)}"
+            )
+
+        timeframe = self._resolve_timeframe(
+            self.config.timeframe
+        )
+
+        asset_class = getattr(
+            self.config,
+            "asset_class",
+            "forex",
+        )
+
+        replay = HistoricalReplayEngine(
+            normalized_bars,
+            self.clock,
+        )
+
+        signals: List[Any] = []
         active_trades: List[VirtualTrade] = []
         completed_trades: List[VirtualTrade] = []
 
         bar_index = 0
+
         while replay.has_next():
+
             current_bar, history_slice = replay.next_step()
-            
-            # 1. Update active open trades with current bar (future data for past signals)
-            updated_active = []
+
+            # ==========================================================
+            # 1. Mise à jour des trades déjà ouverts
+            # ==========================================================
+
+            updated_active: list[VirtualTrade] = []
+
             for trade in active_trades:
-                evaluated = VirtualOutcomeEngine.evaluate_trade(trade, current_bar, self.config.cost_model)
+
+                evaluated = (
+                    VirtualOutcomeEngine.evaluate_trade(
+                        trade,
+                        current_bar,
+                        self.config.cost_model,
+                    )
+                )
+
                 if evaluated.is_open:
                     updated_active.append(evaluated)
                 else:
                     completed_trades.append(evaluated)
+
             active_trades = updated_active
 
-            # 2. Warm-up Period Check
-            if len(history_slice) < self.config.warmup_bars:
+            # ==========================================================
+            # 2. Warm-up
+            # ==========================================================
+
+            if (
+                len(history_slice)
+                < self.config.warmup_bars
+            ):
                 bar_index += 1
                 continue
 
-            # 3. Process ATIP Pipeline at T (strictly history_slice)
-            #
-            # SignalEngine.process(history, symbol, timeframe) renvoie un
-            # dict {"signal": str, "regime": str, "score": float,
-            # "risk_levels": {...}, "final_signal": FinalSignal}. Le reste
-            # de cette boucle (VirtualOutcomeEngine, MetricsCalculator)
-            # attend un objet FinalSignal, donc on extrait explicitement
-            # result["final_signal"] plutôt que le dict brut.
-            if self.signal_engine is not None:
-                result = self.signal_engine.process(
-                    history_slice,
-                    symbol=self.config.symbol,
-                    timeframe=self.config.timeframe,
-                )
-                signal = result["final_signal"]
-            else:
-                bar_ts = getattr(current_bar, "timestamp", datetime.now(timezone.utc))
-                signal = FinalSignal(
-                    signal_id=f"SIG-{bar_index}",
-                    symbol=self.config.symbol,
-                    asset_class="FX",
-                    timeframe=self.config.timeframe,
-                    timestamp=bar_ts,
-                    direction=FinalSignalDirection.NO_TRADE,
-                    no_trade_reason=NoTradeReason.NONE,
-                    strategy="BASELINE",
-                    market_regime="RANGING",
-                    opportunity_status="N/A",
-                    opportunity_score=0.0,
-                    risk_status="N/A",
-                    risk_score=0.0,
-                    data_quality_status="VALID",
-                    reasons=["Baseline replay run"],
-                    evidence={},
-                )
+            # ==========================================================
+            # 3. CONSTRUCTION DU SNAPSHOT CANONIQUE
+            # ==========================================================
+
+            snapshot = MarketSnapshot(
+                symbol=self.config.symbol,
+                asset_class=asset_class,
+                timeframe=timeframe,
+                timestamp=current_bar.timestamp,
+                bars=tuple(history_slice),
+            )
+
+            # ==========================================================
+            # 4. UNIQUE SOURCE DE DÉCISION
+            # ==========================================================
+
+            pipeline_result = self.pipeline.process(
+                snapshot
+            )
+
+            signal = pipeline_result.signal
+
             signals.append(signal)
 
-            # 4. If Signal émis, planifier l'entrée virtuelle à la bougie T+1
-            if signal.direction in (FinalSignalDirection.BUY, FinalSignalDirection.SELL):
-                # Simulated entry on current bar close or next open
-                trade = VirtualOutcomeEngine.create_trade_from_signal(signal, current_bar.close, self.config.cost_model)
-                if trade:
+            # ==========================================================
+            # 5. TRADE VIRTUEL
+            # ==========================================================
+
+            if signal.direction.value in (
+                "BUY",
+                "SELL",
+            ):
+
+                trade = (
+                    VirtualOutcomeEngine.create_trade_from_signal(
+                        signal,
+                        current_bar.close,
+                        self.config.cost_model,
+                    )
+                )
+
+                if trade is not None:
                     active_trades.append(trade)
 
             bar_index += 1
 
-        all_trades = completed_trades + active_trades
-        metrics = MetricsCalculator.calculate(signals, all_trades, self.config.warmup_bars)
+        # ==============================================================
+        # 6. MÉTRIQUES
+        # ==============================================================
 
-        first_bar = bars.iloc[0] if hasattr(bars, "iloc") else bars[0]
-        last_bar = bars.iloc[-1] if hasattr(bars, "iloc") else bars[-1]
+        all_trades = (
+            completed_trades
+            + active_trades
+        )
 
-        start_ts = getattr(first_bar, "timestamp", None)
-        if start_ts is None and hasattr(first_bar, "__getitem__"):
-            start_ts = first_bar["timestamp"]
-            
-        end_ts = getattr(last_bar, "timestamp", None)
-        if end_ts is None and hasattr(last_bar, "__getitem__"):
-            end_ts = last_bar["timestamp"]
+        metrics = MetricsCalculator.calculate(
+            signals,
+            all_trades,
+            self.config.warmup_bars,
+        )
+
+        first_bar = normalized_bars[0]
+        last_bar = normalized_bars[-1]
+
+        start_ts = first_bar.timestamp
+        end_ts = last_bar.timestamp
 
         return BacktestResult(
-            run_id=f"BT-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
+            run_id=(
+                "BT-"
+                + datetime.now(timezone.utc)
+                .strftime("%Y%m%d-%H%M%S")
+            ),
             config=self.config,
             start_timestamp=start_ts,
             end_timestamp=end_ts,

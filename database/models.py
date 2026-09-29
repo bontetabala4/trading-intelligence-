@@ -120,3 +120,47 @@ class IngestionEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     asset: Mapped["Asset"] = relationship(back_populates="ingestion_events")
+
+
+class DecisionRecord(Base):
+    """
+    Mémoire V1 — une ligne par exécution du pipeline décisionnel.
+
+    Permet de comparer plus tard ce qu'ATIP pensait vs ce qui s'est passé.
+    """
+
+    __tablename__ = "decision_records"
+    __table_args__ = (
+        UniqueConstraint("signal_id", name="uq_decision_records_signal_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    bar_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    no_trade_reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_regime: Mapped[str] = mapped_column(String(64), nullable=False)
+    opportunity_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    opportunity_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    risk_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    risk_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    data_quality_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    data_quality_score: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_reference: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_reference: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_reference: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reasons_json: Mapped[str] = mapped_column(String, nullable=False, default="[]")
+    features_json: Mapped[str] = mapped_column(String, nullable=False, default="{}")
+    regime_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    opportunity_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    evidence_json: Mapped[str] = mapped_column(String, nullable=False, default="{}")
+    broker_backend: Mapped[str] = mapped_column(String(16), nullable=False)
+    app_env: Mapped[str] = mapped_column(String(16), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    config_json: Mapped[str] = mapped_column(String, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

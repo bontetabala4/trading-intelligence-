@@ -9,7 +9,7 @@ from configs.settings import get_settings
 from apps.api.routers import regime
 from apps.api.routers import signals
 from apps.api.routers import risk
-from apps.api.routers import execution
+from apps.api.routers import decision, execution
 
 
 def configure_logging() -> None:
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(features.router)
     app.include_router(regime.router)
     app.include_router(signals.router)
+    app.include_router(decision.router)
     app.include_router(risk.router)
     app.include_router(execution.router)
 
