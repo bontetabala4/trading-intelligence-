@@ -31,8 +31,8 @@ class MeanReversionStrategy(BaseStrategy):
         else:
             evidence.append("RSI_IN_NEUTRAL_RANGE_ZONE")
 
-        sl_pips = round(atr_14 * 1.0 * 10000, 1) if atr_14 else 10.0
-        tp_pips = round(atr_14 * 1.5 * 10000, 1) if atr_14 else 15.0
+        sl_distance = round(atr_14 * 1.0, 8) if atr_14 else 0.0010
+        tp_distance = round(atr_14 * 1.5, 8) if atr_14 else 0.0015
 
         return StrategySignal(
             symbol=regime.symbol,
@@ -43,6 +43,6 @@ class MeanReversionStrategy(BaseStrategy):
             strength=strength,
             regime_context=regime.regime,
             evidence=evidence,
-            suggested_sl_pips=sl_pips,
-            suggested_tp_pips=tp_pips
+            suggested_sl_distance=sl_distance,
+            suggested_tp_distance=tp_distance
         )

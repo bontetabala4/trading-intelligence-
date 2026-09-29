@@ -416,7 +416,6 @@ class ATIPPipeline:
                 account=self.account,
                 current_price=current_price,
                 current_spread_pips=1.0,
-                pip_size=0.0001,
                 evaluation_timestamp=snapshot.timestamp,
             )
 

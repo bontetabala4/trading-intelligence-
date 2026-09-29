@@ -55,7 +55,7 @@ class OpportunityDetector:
 
         evidence = {
             "strategy_evaluation": strategy_evaluation,
-            "rsi": features.get("rsi"),
+            "rsi": features.get("rsi_14"),
             "atr": atr,
             "trend_slope": features.get("trend_slope"),
             "bb_upper": features.get("bb_upper"),

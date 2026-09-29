@@ -15,6 +15,7 @@ from core.risk.domain.enums import (
 
 from core.risk.services.sizer import PositionSizer
 from core.risk.services.limits import RiskLimitsChecker
+from brokers.base.interface import SymbolInfo
 
 
 class RiskEngine:
@@ -36,6 +37,7 @@ class RiskEngine:
         current_price: float,
         current_spread_pips: float = 1.0,
         pip_size: float = 0.0001,
+        symbol_info: SymbolInfo | None = None,
         evaluation_timestamp: datetime | None = None,
     ) -> OrderProposal:
 
@@ -112,21 +114,19 @@ class RiskEngine:
         # ==============================================================
         # 3. SL / TP
         # ==============================================================
-
-        sl_pips = (
-            signal.suggested_sl_pips
-            if signal.suggested_sl_pips is not None
-            else 15.0
+        sl_distance = (
+            signal.suggested_sl_distance
+            if signal.suggested_sl_distance is not None
+            else 0.0
         )
 
-        tp_pips = (
-            signal.suggested_tp_pips
-            if signal.suggested_tp_pips is not None
-            else 30.0
+        tp_distance = (
+            signal.suggested_tp_distance
+            if signal.suggested_tp_distance is not None
+            else 0.0
         )
 
-        if sl_pips <= 0 or tp_pips <= 0:
-
+        if sl_distance <= 0 or tp_distance <= 0:
             return OrderProposal(
                 symbol=signal.symbol,
                 signal_type=signal.signal,
@@ -144,28 +144,25 @@ class RiskEngine:
                 ],
                 engine_version=self.engine_version,
             )
-
         if signal.signal == SignalType.BUY:
 
             sl_price = round(
-                current_price - (sl_pips * pip_size),
+                current_price - sl_distance,
                 5,
             )
 
             tp_price = round(
-                current_price + (tp_pips * pip_size),
+                current_price + tp_distance,
                 5,
             )
-
         else:
-
             sl_price = round(
-                current_price + (sl_pips * pip_size),
+                current_price + sl_distance,
                 5,
             )
 
             tp_price = round(
-                current_price - (tp_pips * pip_size),
+                current_price - tp_distance,
                 5,
             )
 
@@ -174,8 +171,10 @@ class RiskEngine:
         # ==============================================================
 
         volume_lots = self.sizer.calculate_lot_size(
-            account.balance,
-            sl_pips,
+            balance=account.balance,
+            sl_distance=sl_distance,
+            symbol_info=symbol_info,
+            pip_size=pip_size,
         )
 
         if volume_lots <= 0.0:

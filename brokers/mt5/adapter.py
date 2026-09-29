@@ -1,14 +1,3 @@
-"""
-MT5Adapter — implémentation réelle de BrokerInterface via le package
-`MetaTrader5` (Windows uniquement, nécessite un terminal MT5 installé
-et connecté à un compte).
-
-Ce module est le SEUL endroit du projet qui importe le package `MetaTrader5`.
-Tout le reste du système passe exclusivement par BrokerInterface.
-
-READ ONLY à l'Étape 1 : execute_order() hérite du stub désactivé de la
-classe de base et n'est pas surchargé ici.
-"""
 import logging
 from datetime import datetime, timezone
 
@@ -28,14 +17,24 @@ _TIMEFRAME_MAP_BUILT = False
 _TF_MAP: dict[Timeframe, int] = {}
 
 
+def _load_mt5():
+    """Charge la dépendance MT5 optionnelle sans import statique résolu par l'IDE."""
+    from importlib import import_module
+
+    try:
+        return import_module("MetaTrader5")
+    except ImportError as exc:
+        raise BrokerConnectionError(
+            "Le package MetaTrader5 est requis pour utiliser l'adaptateur MT5."
+        ) from exc
+
+
 def _build_timeframe_map() -> None:
-    """Construit la table de correspondance Timeframe -> constante MT5 à l'import,
-    seulement si le package MetaTrader5 est disponible (évite un crash sur
-    machines non-Windows qui n'importeront jamais réellement cet adaptateur)."""
+    
     global _TIMEFRAME_MAP_BUILT
     if _TIMEFRAME_MAP_BUILT:
         return
-    import MetaTrader5 as mt5  # import local : ne casse rien si absent tant qu'on n'instancie pas MT5Adapter
+    mt5 = _load_mt5()
 
     _TF_MAP.update(
         {
@@ -69,7 +68,7 @@ class MT5Adapter(BrokerInterface):
         self._connected = False
 
     def connect(self) -> None:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         _build_timeframe_map()
 
@@ -94,14 +93,14 @@ class MT5Adapter(BrokerInterface):
         logger.info("Connexion MT5 établie (server masqué dans les logs).")
 
     def disconnect(self) -> None:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         mt5.shutdown()
         self._connected = False
         logger.info("Connexion MT5 fermée.")
 
     def is_connected(self) -> bool:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         if not self._connected:
             return False
@@ -110,7 +109,7 @@ class MT5Adapter(BrokerInterface):
         return info is not None and info.connected
 
     def get_terminal_info(self) -> TerminalInfo:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         info = mt5.terminal_info()
         if info is None:
@@ -123,7 +122,7 @@ class MT5Adapter(BrokerInterface):
         )
 
     def get_account_info(self) -> AccountInfo:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         info = mt5.account_info()
         if info is None:
@@ -139,7 +138,7 @@ class MT5Adapter(BrokerInterface):
         )
 
     def list_symbols(self) -> list[str]:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         symbols = mt5.symbols_get()
         if symbols is None:
@@ -147,7 +146,7 @@ class MT5Adapter(BrokerInterface):
         return [s.name for s in symbols]
 
     def get_symbol_info(self, symbol: str) -> SymbolInfo:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         info = mt5.symbol_info(symbol)
         if info is None:
@@ -160,12 +159,19 @@ class MT5Adapter(BrokerInterface):
             currency_base=info.currency_base,
             currency_quote=info.currency_profit,
             digits=info.digits,
+            point=info.point,
+            trade_tick_size=info.trade_tick_size,
+            trade_tick_value=info.trade_tick_value,
+            volume_min=info.volume_min,
+            volume_max=info.volume_max,
+            volume_step=info.volume_step,
+            trade_contract_size=info.trade_contract_size,
         )
 
     def get_ohlcv(
         self, symbol: str, timeframe: Timeframe, count: int = 500
     ) -> list[OHLCVBar]:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         _build_timeframe_map()
         mt5_tf = _TF_MAP[timeframe]
@@ -180,7 +186,7 @@ class MT5Adapter(BrokerInterface):
     def get_ohlcv_range(
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> list[OHLCVBar]:
-        import MetaTrader5 as mt5
+        mt5 = _load_mt5()
 
         _build_timeframe_map()
         mt5_tf = _TF_MAP[timeframe]

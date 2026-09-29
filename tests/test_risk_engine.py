@@ -17,8 +17,8 @@ def test_risk_engine_approval():
         signal=SignalType.BUY,
         strength=0.8,
         regime_context=TrendRegime.TRENDING_BULL,
-        suggested_sl_pips=15.0,
-        suggested_tp_pips=30.0
+        suggested_sl_distance=0.0015,
+        suggested_tp_distance=0.0030
     )
 
     account = AccountState(balance=10000.0, equity=10000.0, free_margin=10000.0)

@@ -1,10 +1,4 @@
-"""
-BrokerInterface — contrat abstrait que tout adaptateur de broker doit respecter.
 
-Étape 1 : seul MT5Adapter (et son double MockMT5Adapter) implémente cette
-interface. Les futurs adaptateurs (IBKR, OANDA, Futures, Crypto) suivront
-le même contrat sans que le reste du système n'ait à changer.
-"""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,6 +42,16 @@ class SymbolInfo:
     currency_base: str | None = None
     currency_quote: str | None = None
     digits: int | None = None
+
+    point: float | None = None
+    trade_tick_size: float | None = None
+    trade_tick_value: float | None = None
+
+    volume_min: float | None = None
+    volume_max: float | None = None
+    volume_step: float | None = None
+
+    trade_contract_size: float | None = None
 
 
 @dataclass(frozen=True)
