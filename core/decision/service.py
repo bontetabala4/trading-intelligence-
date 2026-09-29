@@ -119,6 +119,10 @@ def decision_record_to_dict(record: DecisionRecord) -> dict[str, Any]:
 def _to_jsonable(value: Any) -> Any:
     if value is None:
         return None
+    if isinstance(value, BaseModel):
+        return _to_jsonable(value.model_dump(mode="python"))
+    if hasattr(value, "model_dump"):
+        return _to_jsonable(value.model_dump(mode="python"))
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value) and not isinstance(value, type):
