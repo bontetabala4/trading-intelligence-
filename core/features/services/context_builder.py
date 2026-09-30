@@ -1,13 +1,8 @@
-"""
-MarketContextBuilder — assemble FeatureSet + DataQualityReport en
-MarketContext (section 11 et 17). Si les données sont invalides ou
-insuffisantes, le contexte le reflète explicitement plutôt que de
-présenter silencieusement un résultat comme fiable.
-"""
+
 from brokers.base.interface import OHLCVBar, Timeframe
 from core.data.quality_engine import DataQualityEngine, DataQualityReport
 from core.features.models import FeatureSet, MarketContext
-from core.features.services.feature_engine import FeatureEngine, InsufficientDataError
+from core.features.services.feature_engine import FeatureEngine
 from core.market.selection import AssetClass
 
 
@@ -27,8 +22,18 @@ class MarketContextBuilder:
         timeframe: Timeframe,
         bars: list[OHLCVBar],
     ) -> MarketContext:
-        quality = self._quality_engine.evaluate(bars, timeframe)
-        feature_set = self._feature_engine.compute_feature_set(symbol, timeframe, bars)
+        quality = self._quality_engine.evaluate(
+            bars,
+            timeframe,
+            asset_class,
+        )
+
+        feature_set = self._feature_engine.compute_feature_set(
+            symbol,
+            timeframe,
+            bars,
+        )
+
         last_bar = max(bars, key=lambda b: b.timestamp)
 
         return MarketContext(

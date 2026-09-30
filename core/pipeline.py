@@ -1,8 +1,12 @@
+# core/pipeline.py
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from brokers.base.interface import OHLCVBar, Timeframe
+from brokers.base.interface import Timeframe
+
+from core.market.snapshot import MarketSnapshot
 
 from core.data.quality_engine import (
     DataQualityEngine,
@@ -47,7 +51,6 @@ from core.signal.signal_engine import (
 
 from core.signal.domain import (
     FinalSignal,
-    FinalSignalDirection,
 )
 
 from core.risk.services.engine import (
@@ -57,64 +60,6 @@ from core.risk.services.engine import (
 from core.risk.domain.models import (
     AccountState,
 )
-
-from core.market.snapshot import MarketSnapshot
-
-@dataclass(frozen=True)
-class MarketSnapshot:
-    symbol: str
-    asset_class: str
-    timeframe: Timeframe
-    timestamp: datetime
-    bars: tuple[OHLCVBar, ...]
-
-    def __post_init__(self) -> None:
-        if self.timestamp.tzinfo is None:
-            raise ValueError(
-                "MarketSnapshot.timestamp doit être timezone-aware."
-            )
-
-        # Normalisation : accepte une liste ou un tuple en entrée,
-        # mais garantit un tuple en interne pour que les comparaisons
-        # ci-dessous soient fiables quel que soit le type fourni par
-        # l'appelant (dataclass frozen -> object.__setattr__ requis).
-        object.__setattr__(self, "bars", tuple(self.bars))
-
-        ordered = tuple(
-            sorted(
-                self.bars,
-                key=lambda bar: bar.timestamp,
-            )
-        )
-
-        if ordered != self.bars:
-            raise ValueError(
-                "Les bars du MarketSnapshot doivent être triées "
-                "chronologiquement."
-            )
-
-        if not self.bars:
-            raise ValueError(
-                "MarketSnapshot doit contenir au moins une bougie."
-            )
-
-        future_bars = [
-            bar
-            for bar in self.bars
-            if bar.timestamp > self.timestamp
-        ]
-
-        if future_bars:
-            raise ValueError(
-                "Look-ahead détecté : une ou plusieurs bougies "
-                "sont postérieures au timestamp du snapshot."
-            )
-
-        if self.bars[-1].timestamp != self.timestamp:
-            raise ValueError(
-                "La dernière bougie doit correspondre exactement "
-                "au timestamp du snapshot."
-            )
 
 @dataclass(frozen=True)
 class PipelineResult:
@@ -158,7 +103,6 @@ class ATIPPipeline:
         risk_engine: Optional[RiskEngine] = None,
         account: Optional[AccountState] = None,
     ) -> None:
-
         self.data_quality_engine = (
             data_quality_engine or DataQualityEngine()
         )
@@ -216,13 +160,12 @@ class ATIPPipeline:
         quality_report = self.data_quality_engine.evaluate(
             list(snapshot.bars),
             snapshot.timeframe,
+            snapshot.asset_class,
         )
 
         data_quality_status = quality_report.status.value
         data_quality_score = quality_report.score
 
-        # Une donnée invalide ne doit jamais alimenter les moteurs
-        # décisionnels.
         if quality_report.status == DataQualityStatus.INVALID:
 
             signal = self.signal_engine.generate_signal(
@@ -261,7 +204,6 @@ class ATIPPipeline:
 
         features = dict(feature_set.values)
 
-        # Alias utilisés par OpportunityDetector.
         features["close"] = snapshot.bars[-1].close
 
         # ==============================================================
@@ -289,7 +231,6 @@ class ATIPPipeline:
             strategy_signals
         )
 
-        # Aucun signal stratégique exploitable.
         if strategy_signal is None:
 
             signal = self.signal_engine.generate_signal(
@@ -411,8 +352,7 @@ class ATIPPipeline:
 
         proposed_direction = (
             strategy_signal.signal.value
-            if strategy_signal.signal
-            != SignalType.NEUTRAL
+            if strategy_signal.signal != SignalType.NEUTRAL
             else None
         )
 

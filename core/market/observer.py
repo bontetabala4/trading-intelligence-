@@ -46,7 +46,11 @@ class MarketObserver:
         if not bars:
             raise MarketObserverError(f"Aucune donnée disponible pour {symbol}/{timeframe.value}.")
 
-        quality_report = self._quality_engine.evaluate(bars, timeframe)
+        quality_report = self._quality_engine.evaluate(
+            bars,
+            timeframe,
+            asset_class,
+        )
 
         latest = max(bars, key=lambda b: b.timestamp)
 

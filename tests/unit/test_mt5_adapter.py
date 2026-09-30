@@ -1,7 +1,11 @@
 import pytest
+import numpy as np
 
 from brokers.base.interface import ExecutionDisabledError, OrderRequest, Timeframe
 from brokers.mt5.mock_adapter import MockMT5Adapter
+
+from brokers.mt5 import adapter as mt5_adapter
+from brokers.mt5.adapter import MT5Adapter
 
 
 def test_connect_sets_connected_state():

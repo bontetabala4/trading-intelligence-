@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 from brokers.base.interface import OHLCVBar, Timeframe
 from core.data.quality_engine import DataQualityStatus
 
+from core.market.selection import AssetClass
+
 
 def _bar(ts, o=1.0, h=1.1, l=0.9, c=1.05, v=100.0):
     return OHLCVBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v, spread=1.0)
@@ -53,3 +55,40 @@ def test_stale_data_is_flagged(quality_engine):
     bars = [_bar(old_ts)]
     report = quality_engine.evaluate(bars, Timeframe.M15)
     assert any("trop ancienne" in issue for issue in report.issues)
+
+# tests/unit/test_data_quality.py
+
+def test_forex_weekend_gap_is_not_flagged(quality_engine):
+    friday = datetime(2026, 9, 25, 23, 45, tzinfo=timezone.utc)
+    monday = datetime(2026, 9, 28, 0, 0, tzinfo=timezone.utc)
+
+    bars = [
+        _bar(friday),
+        _bar(monday),
+    ]
+
+    issues = quality_engine._check_gaps(
+        bars,
+        Timeframe.M15,
+        AssetClass.FOREX,
+    )
+
+    assert issues == []
+
+
+def test_forex_intraday_gap_is_still_detected(quality_engine):
+    first = datetime(2026, 9, 29, 10, 0, tzinfo=timezone.utc)
+    second = datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc)
+
+    bars = [
+        _bar(first),
+        _bar(second),
+    ]
+
+    issues = quality_engine._check_gaps(
+        bars,
+        Timeframe.M15,
+        AssetClass.FOREX,
+    )
+
+    assert any("Trou de données" in issue for issue in issues)

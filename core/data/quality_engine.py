@@ -1,14 +1,9 @@
-"""
-DataQualityEngine — évalue la fiabilité d'une série OHLCV avant qu'elle
-ne soit utilisée par le reste du système.
 
-Aucune logique prédictive ici : uniquement des règles déterministes de
-validation (trous, doublons, OHLC invalide, staleness, valeurs nulles).
-"""
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from core.market.selection import AssetClass
 
 from brokers.base.interface import OHLCVBar, Timeframe
 
@@ -56,7 +51,12 @@ class DataQualityReport:
 class DataQualityEngine:
     """Applique une série de règles déterministes sur une liste d'OHLCVBar."""
 
-    def evaluate(self, bars: list[OHLCVBar], timeframe: Timeframe) -> DataQualityReport:
+    def evaluate(
+    self,
+    bars: list[OHLCVBar],
+    timeframe: Timeframe,
+    asset_class: AssetClass | None = None,
+) -> DataQualityReport:
         if not bars:
             return DataQualityReport(
                 status=DataQualityStatus.INVALID,
@@ -69,7 +69,7 @@ class DataQualityEngine:
         issues += self._check_ohlc_validity(bars)
         issues += self._check_nulls_and_nans(bars)
         issues += self._check_duplicates(bars)
-        issues += self._check_gaps(bars, timeframe)
+        issues += self._check_gaps(bars, timeframe, asset_class)
         issues += self._check_staleness(bars, timeframe)
 
         score = self._compute_score(issues, total_bars=len(bars))
@@ -141,21 +141,36 @@ class DataQualityEngine:
         return issues
 
     @staticmethod
-    def _check_gaps(bars: list[OHLCVBar], timeframe: Timeframe) -> list[str]:
+    def _is_expected_forex_weekend_gap(start: datetime, end: datetime) -> bool:
+        
+        return start.weekday() == 4 and end.weekday() in {6, 0}
+
+    @staticmethod
+    def _check_gaps(
+        bars: list[OHLCVBar],
+        timeframe: Timeframe,
+        asset_class: AssetClass | None = None,
+    ) -> list[str]:
         expected_delta = _TIMEFRAME_SECONDS[timeframe]
         issues = []
         sorted_bars = sorted(bars, key=lambda b: b.timestamp)
+
         for prev, curr in zip(sorted_bars, sorted_bars[1:]):
             delta = (curr.timestamp - prev.timestamp).total_seconds()
-            # Tolérance : jusqu'à 3x l'intervalle attendu avant de signaler un trou
-            # (marge pour weekends/périodes calmes, faute de calendrier de marché).
-            if delta > expected_delta * 3:
-                issues.append(
-                    f"Trou de données entre {prev.timestamp} et {curr.timestamp} "
-                    f"({delta / 60:.0f} min, attendu ~{expected_delta / 60:.0f} min)."
-                )
-        return issues
 
+            if delta <= expected_delta * 3:
+                continue
+
+            if asset_class == AssetClass.FOREX and DataQualityEngine._is_expected_forex_weekend_gap(prev.timestamp, curr.timestamp):
+                continue
+
+            issues.append(
+                f"Trou de données entre {prev.timestamp} et {curr.timestamp} "
+                f"({delta / 60:.0f} min, attendu ~{expected_delta / 60:.0f} min)."
+            )
+
+        return issues
+    
     @staticmethod
     def _check_staleness(bars: list[OHLCVBar], timeframe: Timeframe) -> list[str]:
         expected_delta = _TIMEFRAME_SECONDS[timeframe]
