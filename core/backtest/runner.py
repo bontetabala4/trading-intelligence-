@@ -15,6 +15,12 @@ from core.backtest.metrics import MetricsCalculator
 from core.backtest.replay_engine import HistoricalReplayEngine
 from core.backtest.virtual_outcome import VirtualOutcomeEngine
 
+from core.risk.domain.models import AccountState
+from core.risk.services.engine import RiskEngine
+from core.risk.services.sizer import PositionSizer
+
+from core.risk.domain.enums import RiskStatus
+
 from core.pipeline import (
     ATIPPipeline,
     MarketSnapshot,
@@ -22,15 +28,6 @@ from core.pipeline import (
 
 
 class BacktestRunner:
-    """
-    Exécute un backtest historique avec le pipeline ATIP canonique.
-
-    IMPORTANT :
-    Le signal_engine historique est conservé uniquement dans la
-    signature pour compatibilité avec d'anciens appelants.
-
-    Il n'est volontairement plus utilisé pour prendre une décision.
-    """
 
     def __init__(
         self,
@@ -42,13 +39,81 @@ class BacktestRunner:
         self.config = config
 
         # Pipeline canonique unique.
-        self.pipeline = pipeline or ATIPPipeline()
+        if pipeline is not None:
+            self.pipeline = pipeline
+        else:
+            risk_engine = RiskEngine(
+                sizer=PositionSizer(
+                    # BacktestConfig exprime le risque en pourcentage humain :
+                    # 1.0 = 1%.
+                    # PositionSizer utilise une fraction :
+                    # 0.01 = 1%.
+                    risk_per_trade_pct=config.risk_per_trade_pct / 100.0,
+                )
+            )
+
+        self.account = AccountState(
+            balance=config.initial_capital,
+            equity=config.initial_capital,
+            free_margin=config.initial_capital,
+            daily_pnl=0.0,
+            open_positions_count=0,
+        )
+
+        self.pipeline = ATIPPipeline(
+            risk_engine=risk_engine,
+            account=self.account,
+        )
 
         # Compatibilité legacy uniquement.
         # Aucun appel à cet objet ne doit être effectué.
         self.signal_engine = signal_engine
 
         self.clock = SimulationClock()
+
+    def _update_account_after_trade(
+        self,
+        trade: VirtualTrade,
+        active_positions_count: int,
+    ) -> None:
+        """
+        Met à jour le capital après la clôture d'un trade.
+
+        Le P&L monétaire est dérivé du résultat en R et du
+        montant de risque fixé par le RiskEngine.
+
+        P&L = net_result_r × risk_amount_account_currency
+        """
+
+        if trade.is_open:
+            return
+
+        if trade.net_result_r is None:
+            return
+
+        pnl = (
+            trade.net_result_r
+            * trade.risk_amount_account_currency
+        )
+
+        new_balance = self.account.balance + pnl
+
+        if new_balance <= 0:
+            raise ValueError(
+                "Le capital du compte est devenu <= 0 "
+                "pendant le backtest."
+            )
+
+        self.account = AccountState(
+            balance=new_balance,
+            equity=new_balance,
+            free_margin=new_balance,
+            daily_pnl=self.account.daily_pnl + pnl,
+            open_positions_count=active_positions_count,
+        )
+
+    # Le pipeline doit utiliser exactement le même état de compte.
+        self.pipeline.account = self.account
 
     # ------------------------------------------------------------------
     # Helpers
@@ -80,16 +145,6 @@ class BacktestRunner:
 
     @staticmethod
     def _normalize_bars(bars: Any) -> list[OHLCVBar]:
-        """
-        Normalise les différentes sources historiques vers une liste
-        d'OHLCVBar.
-
-        Supporte :
-        - list[OHLCVBar]
-        - tuple[OHLCVBar]
-        - pandas.DataFrame
-        """
-
         if hasattr(bars, "to_dict") and hasattr(bars, "columns"):
             records = bars.to_dict("records")
 
@@ -98,17 +153,16 @@ class BacktestRunner:
             for row in records:
                 normalized.append(
                     OHLCVBar(
-                        timestamp=row["timestamp"],
+                        timestamp=row.get("timestamp", row.get("time")),
                         open=float(row["open"]),
                         high=float(row["high"]),
                         low=float(row["low"]),
                         close=float(row["close"]),
-                        volume=float(row.get("volume", 0.0)),
                         spread=float(row.get("spread", 0.0)),
-                        tick_volume=int(
+                        volume=float(
                             row.get(
-                                "tick_volume",
-                                row.get("volume", 0),
+                                "volume",
+                                row.get("tick_volume", 0.0)
                             )
                         ),
                         real_volume=int(
@@ -149,6 +203,8 @@ class BacktestRunner:
 
         if config is not None:
             self.config = config
+
+            self.clock = SimulationClock()
 
         normalized_bars = self._normalize_bars(bars)
 
@@ -201,19 +257,21 @@ class BacktestRunner:
             updated_active: list[VirtualTrade] = []
 
             for trade in active_trades:
-
-                evaluated = (
-                    VirtualOutcomeEngine.evaluate_trade(
-                        trade,
-                        current_bar,
-                        self.config.cost_model,
-                    )
+                evaluated = VirtualOutcomeEngine.evaluate_trade(
+                    trade,
+                    current_bar,
+                    self.config.cost_model,
                 )
 
                 if evaluated.is_open:
                     updated_active.append(evaluated)
                 else:
                     completed_trades.append(evaluated)
+
+                    self._update_account_after_trade(
+                        evaluated,
+                        active_positions_count=len(updated_active),
+                    )
 
             active_trades = updated_active
 
@@ -256,21 +314,22 @@ class BacktestRunner:
             # 5. TRADE VIRTUEL
             # ==========================================================
 
-            if signal.direction.value in (
-                "BUY",
-                "SELL",
-            ):
+            risk_proposal = pipeline_result.risk_proposal
 
-                trade = (
-                    VirtualOutcomeEngine.create_trade_from_signal(
-                        signal,
-                        current_bar.close,
-                        self.config.cost_model,
+            if (
+                    signal.direction.value in ("BUY", "SELL")
+                    and risk_proposal is not None
+                    and risk_proposal.status == RiskStatus.APPROVED
+                ):
+                    trade = VirtualOutcomeEngine.create_trade_from_order(
+                        signal=signal,
+                        order_proposal=risk_proposal,
+                        entry_price=current_bar.close,
+                        cost_model=self.config.cost_model,
                     )
-                )
 
-                if trade is not None:
-                    active_trades.append(trade)
+                    if trade is not None:
+                        active_trades.append(trade)
 
             bar_index += 1
 
