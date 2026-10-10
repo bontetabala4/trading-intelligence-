@@ -299,3 +299,34 @@ def test_order_proposal_uses_updated_dynamic_capital():
 
     assert proposal.risk_amount_account_currency == 102.0
     assert proposal.risk_percentage == 1.0   
+
+def test_backtest_runner_supports_fixed_risk_amount():
+    config = BacktestConfig(
+        symbol="EURUSD",
+        timeframe="M15",
+        initial_capital=10_000.0,
+        risk_mode="FIXED_AMOUNT",
+        fixed_risk_amount=100.0,
+    )
+
+    runner = BacktestRunner(config)
+
+    assert runner.pipeline.risk_engine.sizer.risk_mode == "FIXED_AMOUNT"
+    assert runner.pipeline.risk_engine.sizer.fixed_risk_amount == 100.0
+    assert runner.pipeline.risk_engine.sizer.get_risk_amount(10_000.0) == 100.0
+
+
+def test_fixed_risk_amount_remains_constant_after_capital_growth():
+    config = BacktestConfig(
+        symbol="EURUSD",
+        timeframe="M15",
+        initial_capital=10_000.0,
+        risk_mode="FIXED_AMOUNT",
+        fixed_risk_amount=100.0,
+    )
+
+    runner = BacktestRunner(config)
+
+    assert runner.pipeline.risk_engine.sizer.get_risk_amount(10_000.0) == 100.0
+    assert runner.pipeline.risk_engine.sizer.get_risk_amount(10_200.0) == 100.0
+    assert runner.pipeline.risk_engine.sizer.get_risk_amount(20_000.0) == 100.0

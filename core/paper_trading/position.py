@@ -105,7 +105,7 @@ class PaperPortfolio:
         self.max_open_positions = max_open_positions
         self.open_positions: List[PaperPosition] = []
         self.closed_positions: List[PaperPosition] = []
-        self.peak_equity = initial_capital
+        self.peak_equity = 0.0
         self.max_drawdown_r = 0.0
         self.cumulative_net_r = 0.0
 

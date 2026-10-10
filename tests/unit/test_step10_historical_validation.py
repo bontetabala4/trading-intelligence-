@@ -61,7 +61,9 @@ def test_future_mutation_no_lookahead(real_like_dataset):
 
     # Mutated Future Run
     mutated_df = real_like_dataset.copy()
-    mutated_df.loc[101:, ["open", "high", "low", "close"]] *= 2.0  # Massive future mutation
+    # signals[100] correspond à la barre 100 + warmup (les signaux démarrent après le warm-up).
+    t_bar = 100 + config.warmup_bars
+    mutated_df.loc[t_bar + 1 :, ["open", "high", "low", "close"]] *= 2.0  # Massive future mutation
 
     mutated_results = runner.run(mutated_df, config)
     mutated_signal_at_t = mutated_results.signals[100]

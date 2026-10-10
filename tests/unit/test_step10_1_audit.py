@@ -1,9 +1,3 @@
-"""
-Unit & Integration Tests for ATIP Step 10.1 Independent Audit.
-Guarantees determinism, exact reproducibility, cost sensitivity sanity,
-and future-mutation invariance.
-"""
-
 import numpy as np
 import pandas as pd
 import pytest

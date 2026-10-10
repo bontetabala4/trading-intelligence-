@@ -204,13 +204,12 @@ class RiskEngine:
         # ==============================================================
 
         risk_currency = round(
-            account.balance
-            * self.sizer.risk_per_trade_pct,
+            self.sizer.get_risk_amount(account.balance),
             2,
         )
 
         risk_percentage = round(
-            self.sizer.risk_per_trade_pct * 100,
+            self.sizer.get_risk_percentage(),
             2,
         )
 

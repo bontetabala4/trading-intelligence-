@@ -1,14 +1,16 @@
-"""
-Execution script for Step 11 — Forward / Paper Trading Simulation.
-Runs the streaming forward simulation on the official dataset.
-"""
 
 import json
 import os
+import subprocess
+import sys
+
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from core.paper_trading.engine import ForwardPaperEngine
 
-DATASET_PATH = "data/raw/EURUSD_M15_2022_2025.csv"
+DATASET_PATH = sys.argv[1] if len(sys.argv) > 1 else "data/raw/EURUSD_M15_2023-01-02.csv"
 OUTPUT_DIR = "artifacts/paper_trading/step_11/"
 
 
@@ -19,9 +21,14 @@ def main():
     if not os.path.exists(DATASET_PATH):
         raise FileNotFoundError(f"Dataset non trouvé: {DATASET_PATH}")
 
+    # Garde-fou : refuse toute donnée qui ne ressemble pas à du vrai marché.
+    check = subprocess.run([sys.executable, "scripts/check_real_data.py", DATASET_PATH])
+    if check.returncode != 0:
+        raise SystemExit("Données suspectes : simulation annulée.")
+
     df = pd.read_csv(DATASET_PATH)
 
-    print(f"[STEP 11] Initializing ForwardPaperEngine...")
+    print("[STEP 11] Initializing ForwardPaperEngine...")
     engine = ForwardPaperEngine(
         data=df,
         run_id="paper_sim_official_step_11",

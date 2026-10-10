@@ -1,0 +1,18 @@
+{
+  "total_bars_processed": 93742,
+  "signals": {
+    "BUY": 3172,
+    "SELL": 3046,
+    "NO_TRADE": 87524,
+    "IGNORED": 4925
+  },
+  "trades": {
+    "total": 1293,
+    "wins": 417,
+    "losses": 876,
+    "win_rate_pct": 32.25,
+    "gross_r": -42.0,
+    "net_r": -119.58,
+    "max_drawdown_r": 10119.58
+  }
+}

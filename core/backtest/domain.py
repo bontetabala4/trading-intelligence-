@@ -2,7 +2,7 @@
 Domain models for Backtesting Engine.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -56,6 +56,8 @@ class BacktestConfig:
     cost_model: BacktestCostModel = field(default_factory=BacktestCostModel)
     initial_capital: float = 10000.0
     risk_per_trade_pct: float = 1.0
+    lookback_bars: int = 500
+    max_concurrent_trades: int | None = None
 
 
 @dataclass

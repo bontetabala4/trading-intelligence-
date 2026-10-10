@@ -52,3 +52,41 @@ def test_risk_engine_rejection_daily_drawdown():
     assert proposal.status == RiskStatus.REJECTED
     assert proposal.reject_reason == RiskRejectReason.MAX_DAILY_DRAWDOWN_REACHED
     assert proposal.volume_lots == 0.0
+
+def test_risk_engine_fixed_amount_uses_fixed_risk_contract():
+    from core.risk.services.sizer import PositionSizer
+
+    engine = RiskEngine(
+        sizer=PositionSizer(
+            risk_mode="FIXED_AMOUNT",
+            fixed_risk_amount=100.0,
+        )
+    )
+
+    signal = StrategySignal(
+        symbol="EURUSD",
+        timeframe="M15",
+        timestamp=datetime.now(timezone.utc),
+        strategy_id=StrategyID.TREND_FOLLOWING,
+        signal=SignalType.BUY,
+        strength=0.8,
+        regime_context=TrendRegime.TRENDING_BULL,
+        suggested_sl_distance=0.0015,
+        suggested_tp_distance=0.0030,
+    )
+
+    account = AccountState(
+        balance=20_000.0,
+        equity=20_000.0,
+        free_margin=20_000.0,
+    )
+
+    proposal = engine.evaluate_signal(
+        signal,
+        account,
+        current_price=1.0850,
+    )
+
+    assert proposal.status == RiskStatus.APPROVED
+    assert proposal.risk_amount_account_currency == 100.0
+    assert proposal.risk_percentage == 0.0

@@ -13,7 +13,24 @@ class DatasetValidator:
             if bars.empty:
                 return False, ["Dataset is empty."]
             
-            required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
+            required_cols = {
+                "open",
+                "high",
+                "low",
+                "close"
+            }
+
+            time_col = (
+                "timestamp"
+                if "timestamp" in bars.columns
+                else "time"
+            )
+
+            volume_col = (
+                "volume"
+                if "volume" in bars.columns
+                else "tick_volume"
+            )
             missing = required_cols - set(bars.columns)
             if missing:
                 errors.append(f"Missing required columns: {missing}")

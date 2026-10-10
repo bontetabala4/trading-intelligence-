@@ -51,6 +51,79 @@ class VirtualOutcomeEngine:
             market_regime=signal.market_regime,
             is_open=True,
         )
+
+
+    @staticmethod
+    def create_trade_from_order(
+        signal: FinalSignal,
+        order_proposal,
+        entry_price: float,
+        cost_model: BacktestCostModel,
+    ) -> Optional[VirtualTrade]:
+
+        if order_proposal is None:
+            return None
+
+        if signal.direction not in (
+            FinalSignalDirection.BUY,
+            FinalSignalDirection.SELL,
+        ):
+            return None
+
+        if order_proposal.volume_lots <= 0:
+            return None
+
+        is_long = signal.direction == FinalSignalDirection.BUY
+
+        slippage_price = (
+            cost_model.slippage_points * cost_model.point_value
+        )
+        half_spread_price = (
+            cost_model.spread_points * cost_model.point_value
+        ) / 2.0
+
+        if is_long:
+            adjusted_entry = (
+                entry_price
+                + slippage_price
+                + half_spread_price
+            )
+        else:
+            adjusted_entry = (
+                entry_price
+                - slippage_price
+                - half_spread_price
+            )
+
+        stop_reference = order_proposal.stop_loss
+        target_reference = order_proposal.take_profit
+
+        risk_r_amount = abs(
+            adjusted_entry - stop_reference
+        )
+
+        if risk_r_amount <= 0:
+            return None
+
+        return VirtualTrade(
+            trade_id=str(uuid.uuid4()),
+            signal_id=signal.signal_id,
+            symbol=signal.symbol,
+            timeframe=signal.timeframe,
+            direction=signal.direction.value,
+            entry_timestamp=signal.timestamp,
+            entry_price=adjusted_entry,
+            stop_reference=stop_reference,
+            target_reference=target_reference,
+            risk_r_amount=risk_r_amount,
+            volume_lots=order_proposal.volume_lots,
+            risk_amount_account_currency=(
+                order_proposal.risk_amount_account_currency
+            ),
+            strategy=signal.strategy,
+            market_regime=signal.market_regime,
+            is_open=True,
+        )
  
     @staticmethod
     def evaluate_trade(

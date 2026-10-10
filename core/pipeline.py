@@ -1,10 +1,8 @@
 # core/pipeline.py
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Optional
 
-from brokers.base.interface import Timeframe
 
 from core.market.snapshot import MarketSnapshot
 
@@ -21,7 +19,7 @@ from core.regime.services.engine import (
     MarketRegimeEngine,
 )
 
-from core.strategy.services.engine import (
+from core.strategy.services.StrategyEngine import (
     StrategyEngine,
 )
 
@@ -61,11 +59,6 @@ from core.risk.domain.models import (
     AccountState,
 )
 
-from core.market.structure import (
-    MarketStructure,
-    MarketStructureEngine,
-)
-
 @dataclass(frozen=True)
 class PipelineResult:
     """
@@ -85,7 +78,6 @@ class PipelineResult:
     regime: object
     strategy_signal: Optional[StrategySignal]
     opportunity_result: Optional[OpportunityResult]
-    market_structure: Optional[MarketStructure] = None
 
 
 class ATIPPipeline:
@@ -107,7 +99,6 @@ class ATIPPipeline:
         opportunity_validator: Optional[OpportunityValidator] = None,
         signal_engine: Optional[SignalEngine] = None,
         risk_engine: Optional[RiskEngine] = None,
-        market_structure_engine: Optional[MarketStructureEngine] = None,
         account: Optional[AccountState] = None,
     ) -> None:
         self.data_quality_engine = (
@@ -146,10 +137,6 @@ class ATIPPipeline:
             risk_engine or RiskEngine()
         )
 
-        self.market_structure_engine = (
-            market_structure_engine or MarketStructureEngine()
-        )
-
         self.account = account or AccountState(
             balance=10_000.0,
             equity=10_000.0,
@@ -172,6 +159,7 @@ class ATIPPipeline:
             list(snapshot.bars),
             snapshot.timeframe,
             snapshot.asset_class,
+            now=snapshot.timestamp,
         )
 
         data_quality_status = quality_report.status.value
@@ -203,16 +191,6 @@ class ATIPPipeline:
                 opportunity_result=None,
             )
 
-
-                # ==============================================================
-        # 2.1 MARKET STRUCTURE
-        # ==============================================================
-
-        market_structure = self.market_structure_engine.analyze(
-            list(snapshot.bars)
-        )
-
-
         # ==============================================================
         # 2. FEATURES
         # ==============================================================
@@ -237,7 +215,6 @@ class ATIPPipeline:
             timestamp=snapshot.timestamp,
             features=features,
             data_quality=data_quality_status,
-            market_structure=market_structure,
         )
 
         # ==============================================================
@@ -277,7 +254,6 @@ class ATIPPipeline:
                 regime=regime,
                 strategy_signal=None,
                 opportunity_result=None,
-                market_structure=market_structure,
             )
 
         # ==============================================================
@@ -327,7 +303,6 @@ class ATIPPipeline:
                 regime=regime,
                 strategy_signal=strategy_signal,
                 opportunity_result=None,
-                market_structure=market_structure,
             )
 
         # ==============================================================

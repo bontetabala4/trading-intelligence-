@@ -3,11 +3,10 @@ from datetime import datetime, timedelta, timezone
 from brokers.base.interface import OHLCVBar, Timeframe
 
 from core.pipeline import ATIPPipeline, MarketSnapshot
-from core.signal.domain import FinalSignalDirection
+from core.risk.domain.enums import RiskStatus
 
 
 def build_bars():
-
     bars = []
 
     price = 1.1000
@@ -41,49 +40,170 @@ def build_bars():
     return bars
 
 
-def test_backtest_forward_same_snapshot_same_signal():
+def build_snapshot(bars):
+    return MarketSnapshot(
+        symbol="EURUSD",
+        asset_class="forex",
+        timeframe=Timeframe.M15,
+        timestamp=bars[-1].timestamp,
+        bars=bars,
+    )
+
+
+def assert_strategy_signal_parity(forward_result, backtest_result):
+    forward = forward_result.strategy_signal
+    backtest = backtest_result.strategy_signal
+
+    assert (forward is None) == (backtest is None)
+
+    if forward is None:
+        return
+
+    assert forward.symbol == backtest.symbol
+    assert forward.timeframe == backtest.timeframe
+    assert forward.timestamp == backtest.timestamp
+    assert forward.strategy_id == backtest.strategy_id
+    assert forward.signal == backtest.signal
+    assert forward.strength == backtest.strength
+    assert forward.regime_context == backtest.regime_context
+    assert forward.evidence == backtest.evidence
+    assert forward.suggested_sl_distance == backtest.suggested_sl_distance
+    assert forward.suggested_tp_distance == backtest.suggested_tp_distance
+
+
+def assert_order_proposal_parity(forward_result, backtest_result):
+    forward = forward_result.risk_proposal
+    backtest = backtest_result.risk_proposal
+
+    assert (forward is None) == (backtest is None)
+
+    if forward is None:
+        return
+
+    assert forward.symbol == backtest.symbol
+    assert forward.signal_type == backtest.signal_type
+    assert forward.strategy_id == backtest.strategy_id
+
+    assert forward.volume_lots == backtest.volume_lots
+    assert (
+        forward.risk_amount_account_currency
+        == backtest.risk_amount_account_currency
+    )
+    assert forward.risk_percentage == backtest.risk_percentage
+
+    assert forward.stop_loss == backtest.stop_loss
+    assert forward.take_profit == backtest.take_profit
+
+    assert forward.timestamp == backtest.timestamp
+    assert forward.status == backtest.status
+    assert forward.reject_reason == backtest.reject_reason
+    assert forward.engine_version == backtest.engine_version
+
+
+def assert_final_signal_parity(forward_result, backtest_result):
+    forward = forward_result.signal
+    backtest = backtest_result.signal
+
+    assert forward.direction == backtest.direction
+    assert forward.no_trade_reason == backtest.no_trade_reason
+
+    assert forward.market_regime == backtest.market_regime
+    assert forward.strategy == backtest.strategy
+
+    assert forward.opportunity_status == backtest.opportunity_status
+    assert forward.opportunity_score == backtest.opportunity_score
+
+    assert forward.risk_status == backtest.risk_status
+
+    assert forward.entry_reference == backtest.entry_reference
+    assert forward.stop_reference == backtest.stop_reference
+    assert forward.target_reference == backtest.target_reference
+
+
+def test_backtest_forward_deterministic_pipeline_parity():
     """
-    Vérifie la parité déterministe :
+    Vérifie que le même MarketSnapshot, traité avec deux instances
+    indépendantes du pipeline canonique ATIP, produit exactement
+    les mêmes décisions analytiques et de risque.
 
-        même snapshot
-              ↓
-        même ATIPPipeline
-              ↓
-        même FinalSignal
+    Chemin testé :
 
-    Le test vérifie les éléments importants du signal final.
+        MarketSnapshot
+              ↓
+        ATIPPipeline
+              ↓
+        StrategySignal
+              ↓
+        RiskEngine
+              ↓
+        OrderProposal
+              ↓
+        FinalSignal
+
+    Le test ne compare pas seulement FinalSignal :
+    il vérifie les contrats intermédiaires critiques.
     """
 
     bars = build_bars()
+    snapshot = build_snapshot(bars)
 
-    pipeline = ATIPPipeline()
+    # ------------------------------------------------------------------
+    # FORWARD / PAPER PATH
+    # ------------------------------------------------------------------
 
-    snapshot = MarketSnapshot(
-    symbol="EURUSD",
-    asset_class="forex",
-    timeframe=Timeframe.M15,
-    timestamp=bars[-1].timestamp,
-    bars=bars,
+    forward_pipeline = ATIPPipeline()
+
+    forward_result = forward_pipeline.process(snapshot)
+
+    # ------------------------------------------------------------------
+    # BACKTEST PATH
+    # ------------------------------------------------------------------
+    #
+    # Même snapshot, nouvelle instance indépendante du pipeline.
+    # Cela évite de masquer un état mutable partagé entre les deux appels.
+    #
+
+    backtest_pipeline = ATIPPipeline()
+
+    backtest_result = backtest_pipeline.process(snapshot)
+
+    # ------------------------------------------------------------------
+    # STRATEGY PARITY
+    # ------------------------------------------------------------------
+
+    assert_strategy_signal_parity(
+        forward_result,
+        backtest_result,
     )
-    result_a = pipeline.process(snapshot)
-    result_b = pipeline.process(snapshot)
 
-    signal_a = result_a.signal
-    signal_b = result_b.signal
+    # ------------------------------------------------------------------
+    # RISK / ORDER PROPOSAL PARITY
+    # ------------------------------------------------------------------
 
-    assert signal_a.direction == signal_b.direction
-    assert signal_a.no_trade_reason == signal_b.no_trade_reason
+    assert_order_proposal_parity(
+        forward_result,
+        backtest_result,
+    )
 
-    assert signal_a.market_regime == signal_b.market_regime
-    assert signal_a.strategy == signal_b.strategy
+    # ------------------------------------------------------------------
+    # FINAL SIGNAL PARITY
+    # ------------------------------------------------------------------
 
-    assert signal_a.opportunity_status == signal_b.opportunity_status
-    assert signal_a.opportunity_score == signal_b.opportunity_score
+    assert_final_signal_parity(
+        forward_result,
+        backtest_result,
+    )
 
-    assert signal_a.risk_status == signal_b.risk_status
+    # ------------------------------------------------------------------
+    # RISK STATUS CONTRACT
+    # ------------------------------------------------------------------
 
-    assert signal_a.entry_reference == signal_b.entry_reference
-    assert signal_a.stop_reference == signal_b.stop_reference
-    assert signal_a.target_reference == signal_b.target_reference
-    assert isinstance(signal_a.signal_id, str) and signal_a.signal_id
-    assert isinstance(signal_b.signal_id, str) and signal_b.signal_id
+    forward_order = forward_result.risk_proposal
+    backtest_order = backtest_result.risk_proposal
+
+    if forward_order is not None and backtest_order is not None:
+        assert forward_order.status == backtest_order.status
+
+        if forward_order.status == RiskStatus.APPROVED:
+            assert forward_order.volume_lots > 0
+            assert backtest_order.volume_lots > 0

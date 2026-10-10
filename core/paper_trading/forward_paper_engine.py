@@ -75,7 +75,7 @@ class PaperBroker:
             else:  # SELL
                 if sl is not None and high >= sl:
                     sl_hit = True
-                if tp is not None and low <= sl:
+                if tp is not None and low <= tp:
                     tp_hit = True
 
             # STOP_LOSS_FIRST sur bougie ambiguë

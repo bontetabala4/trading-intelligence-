@@ -56,6 +56,7 @@ class DataQualityEngine:
     bars: list[OHLCVBar],
     timeframe: Timeframe,
     asset_class: AssetClass | None = None,
+    now: datetime | None = None,
 ) -> DataQualityReport:
         if not bars:
             return DataQualityReport(
@@ -70,7 +71,7 @@ class DataQualityEngine:
         issues += self._check_nulls_and_nans(bars)
         issues += self._check_duplicates(bars)
         issues += self._check_gaps(bars, timeframe, asset_class)
-        issues += self._check_staleness(bars, timeframe)
+        issues += self._check_staleness(bars, timeframe, now)
 
         score = self._compute_score(issues, total_bars=len(bars))
         status = self._status_from_score(score, issues)
@@ -172,10 +173,13 @@ class DataQualityEngine:
         return issues
     
     @staticmethod
-    def _check_staleness(bars: list[OHLCVBar], timeframe: Timeframe) -> list[str]:
+    def _check_staleness(
+        bars: list[OHLCVBar], timeframe: Timeframe, now: datetime | None = None
+    ) -> list[str]:
         expected_delta = _TIMEFRAME_SECONDS[timeframe]
         latest = max(bars, key=lambda b: b.timestamp)
-        age_seconds = (datetime.now(timezone.utc) - latest.timestamp).total_seconds()
+        reference = now or datetime.now(timezone.utc)
+        age_seconds = (reference - latest.timestamp).total_seconds()
         if age_seconds > expected_delta * _STALE_AFTER_PERIODS:
             return [
                 f"Dernière bougie ({latest.timestamp}) trop ancienne "

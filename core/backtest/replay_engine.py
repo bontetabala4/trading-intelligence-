@@ -7,10 +7,16 @@ from core.features.domain.ohlcv_series import OHLCVSeries
 
 
 class HistoricalReplayEngine:
-    def __init__(self, bars: List[OHLCVSeries], clock: SimulationClock):
+    def __init__(
+        self,
+        bars: List[OHLCVSeries],
+        clock: SimulationClock,
+        max_history: int | None = None,
+    ):
         self._bars = bars
         self._clock = clock
         self._cursor = 0
+        self._max_history = max_history
 
     def has_next(self) -> bool:
         return self._cursor < len(self._bars)
@@ -31,7 +37,8 @@ class HistoricalReplayEngine:
         self._clock.set_time(current_bar.timestamp)
         
         # Strictly slice history up to current cursor T
-        history_slice = self._bars[: self._cursor + 1]
+        start = 0 if not self._max_history else max(0, self._cursor + 1 - self._max_history)
+        history_slice = self._bars[start : self._cursor + 1]
         self._cursor += 1
 
         return current_bar, history_slice

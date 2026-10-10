@@ -63,11 +63,30 @@ class Step10AuditEngine:
 
     @staticmethod
     def verify_profit_factor(trades_df: pd.DataFrame) -> Tuple[float, float, float]:
-        """Recalculates Profit Factor strictly as Gross Winning R / Absolute Gross Losing R."""
-        winning_r = trades_df[trades_df['net_r'] > 0]['net_r'].sum()
-        losing_r = np.abs(trades_df[trades_df['net_r'] < 0]['net_r'].sum())
-        
+
+        if "net_r" in trades_df.columns:
+            column = "net_r"
+        elif "net_result_r" in trades_df.columns:
+            column = "net_result_r"
+        else:
+            raise ValueError(
+                "Trades DataFrame must contain either 'net_r' or 'net_result_r'."
+            )
+
+        winning_r = trades_df.loc[
+            trades_df[column] > 0,
+            column
+        ].sum()
+
+        losing_r = np.abs(
+            trades_df.loc[
+                trades_df[column] < 0,
+                column
+            ].sum()
+        )
+
         pf = winning_r / losing_r if losing_r > 0 else np.nan
+
         return float(winning_r), float(losing_r), float(pf)
 
     @staticmethod
@@ -100,7 +119,13 @@ class Step10AuditEngine:
     @staticmethod
     def recalculate_max_drawdown(trades_df: pd.DataFrame) -> Tuple[float, Optional[float]]:
         """Recalculates maximum drawdown in R and checks percentage conversion validity."""
-        equity_curve = trades_df['net_r'].cumsum()
+        column = (
+            "net_r"
+            if "net_r" in trades_df.columns
+            else "net_result_r"
+        )
+
+        equity_curve = trades_df[column].cumsum()
         running_max = np.maximum.accumulate(equity_curve)
         drawdown = equity_curve - running_max
         max_dd_r = float(drawdown.min()) if len(drawdown) > 0 else 0.0
