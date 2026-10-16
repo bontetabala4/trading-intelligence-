@@ -355,3 +355,64 @@ def test_create_trade_from_order_preserves_risk_contract():
 
     # Aucun recalcul indépendant du lot n'est effectué par le Backtest.
     assert trade.volume_lots == 0.66
+
+@pytest.mark.parametrize(
+    "basis,direction,expected_entry",
+    [
+        ("MID", FinalSignalDirection.BUY, 100.005),
+        ("MID", FinalSignalDirection.SELL, 99.995),
+        ("BID", FinalSignalDirection.BUY, 100.01),
+        ("BID", FinalSignalDirection.SELL, 100.0),
+        ("ASK", FinalSignalDirection.BUY, 100.0),
+        ("ASK", FinalSignalDirection.SELL, 99.99),
+    ],
+)
+def test_entry_uses_configured_price_basis(basis, direction, expected_entry):
+    model = BacktestCostModel(
+        spread_points=1.0,
+        point_value=0.01,
+        price_basis=basis,
+    )
+    signal = make_signal(
+        direction=direction,
+        stop=99.0 if direction == FinalSignalDirection.BUY else 101.0,
+        target=103.0 if direction == FinalSignalDirection.BUY else 97.0,
+    )
+    trade = VirtualOutcomeEngine.create_trade_from_signal(
+        signal=signal,
+        entry_price=100.0,
+        cost_model=model,
+    )
+    assert trade is not None
+    assert trade.entry_price == pytest.approx(expected_entry)
+
+
+def test_short_stop_uses_ask_range_for_bid_based_bars():
+    signal = make_signal(direction=FinalSignalDirection.SELL, stop=101.0, target=97.0)
+    model = BacktestCostModel(
+        spread_points=10.0,
+        point_value=0.01,
+        price_basis="BID",
+    )
+    trade = VirtualOutcomeEngine.create_trade_from_signal( signal, 100.0, model )
+    assert trade is not None
+
+    # Bid high is only 100.95, but Ask high = Bid high + 0.10 crosses the stop.
+    bar = make_bar(high=100.95, low=100.10)
+    result = VirtualOutcomeEngine.evaluate_trade(trade, bar, model)
+    assert result.is_open is False
+    assert result.exit_reason == ExitReason.STOP_HIT
+    assert result.exit_price == pytest.approx(101.0)
+
+def test_bar_spread_mode_requires_resolved_spread_for_direct_trade_creation():
+    model = BacktestCostModel(
+        use_bar_spread=True,
+        bar_spread_point_value=0.00001,
+        price_basis="BID",
+    )
+    with pytest.raises(ValueError, match="spread_price explicite"):
+        VirtualOutcomeEngine.create_trade_from_signal(
+            signal=make_signal(),
+            entry_price=100.0,
+            cost_model=model,
+        )

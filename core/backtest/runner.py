@@ -276,6 +276,7 @@ class BacktestRunner:
         while replay.has_next():
 
             current_bar, history_slice = replay.next_step()
+            spread_price = self.config.cost_model.spread_price_for_bar(current_bar)
 
             if previous_bar is not None:
                 self._reset_daily_pnl_if_new_day(
@@ -298,6 +299,7 @@ class BacktestRunner:
                         trade,
                         current_bar,
                         self.config.cost_model,
+                        spread_price=spread_price,
                     )
                 )
 
@@ -343,17 +345,18 @@ class BacktestRunner:
             # 4. UNIQUE SOURCE DE DÉCISION
             # ==========================================================
 
-            # Use the backtest cost model (or the bar's broker-point spread)
-            # for risk gating; do not substitute a fixed one-pip spread.
-            spread_points = float(self.config.cost_model.spread_points)
-            if spread_points <= 0 and current_bar.spread is not None:
-                spread_points = float(current_bar.spread)
-            current_spread_price = (
-                spread_points * float(self.config.cost_model.point_value)
+            # The cost model owns the unit conversion. Never treat raw MT5
+            # broker points as pips or apply a different spread to risk and fills.
+            current_spread_price = spread_price
+            current_bid, current_ask = self.config.cost_model.bid_ask_from_price(
+                current_bar.close,
+                current_spread_price,
             )
             pipeline_result = self.pipeline.process(
                 snapshot,
                 current_spread_price=current_spread_price,
+                current_bid=current_bid,
+                current_ask=current_ask,
             )
 
             signal = pipeline_result.signal
@@ -379,6 +382,7 @@ class BacktestRunner:
                         signal,
                         current_bar.close,
                         self.config.cost_model,
+                        spread_price=spread_price,
                     )
                 )
 

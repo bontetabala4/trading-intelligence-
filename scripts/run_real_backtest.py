@@ -21,7 +21,7 @@ def load_csv(path: str) -> pd.DataFrame:
     return df.sort_values("timestamp").reset_index(drop=True)
 
 
-def run(df: pd.DataFrame, timeframe: str, spread=1.0, slip=0.2, commission_r=0.07):
+def run(df: pd.DataFrame, timeframe: str, spread=1.0, slip=0.2, commission_r=0.07, price_basis="BID", use_bar_spread=False, bar_spread_point_value=None):
     cfg = BacktestConfig(
         symbol="EURUSD",
         timeframe=timeframe,
@@ -29,7 +29,14 @@ def run(df: pd.DataFrame, timeframe: str, spread=1.0, slip=0.2, commission_r=0.0
         lookback_bars=500,
         max_concurrent_trades=1,
         cost_model=BacktestCostModel(
-            spread_points=spread, slippage_points=slip, commission_per_trade_r=commission_r
+            spread_points=spread,
+            slippage_points=slip,
+            commission_per_trade_r=commission_r,
+            # This CLI is EURUSD-specific: fixed costs are specified in pips.
+            point_value=0.0001,
+            price_basis=price_basis,
+            use_bar_spread=use_bar_spread,
+            bar_spread_point_value=bar_spread_point_value,
         ),
     )
     return BacktestRunner(cfg).run(df)
@@ -85,18 +92,33 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
     ap.add_argument("--timeframe", default="M15")
-    ap.add_argument("--spread", type=float, default=1.0, help="spread en pips")
-    ap.add_argument("--slip", type=float, default=0.2, help="glissement en pips")
+    ap.add_argument("--spread", type=float, default=1.0, help="spread fixe en pips (EURUSD), ignoré avec --use-bar-spread")
+    ap.add_argument("--slip", type=float, default=0.2, help="glissement en pips (EURUSD)")
     ap.add_argument("--commission-r", type=float, default=0.07, help="commission en R par trade")
+    ap.add_argument("--price-basis", choices=["MID", "BID", "ASK"], default="BID", help="base de prix OHLC; confirmer selon la source des données")
+    ap.add_argument("--use-bar-spread", action="store_true", help="utiliser la colonne spread historique au lieu du spread fixe")
+    ap.add_argument("--bar-spread-point-value", type=float, help="variation de prix pour UN point broker de la colonne spread (ex. 0.00001 sur EURUSD 5 digits)")
     ap.add_argument("--split", default="2025-01-01", help="date de coupure période 1 / période 2")
     a = ap.parse_args()
 
     if subprocess.run([sys.executable, "scripts/check_real_data.py", a.csv]).returncode != 0:
         raise SystemExit("Données suspectes : backtest annulé.")
 
+    if a.use_bar_spread and a.bar_spread_point_value is None:
+        ap.error("--use-bar-spread exige --bar-spread-point-value; ne pas confondre points broker et pips.")
+
     df = load_csv(a.csv)
     print(f"Backtest {len(df)} barres {a.timeframe} ... (quelques minutes)")
-    result = run(df, a.timeframe, a.spread, a.slip, a.commission_r)
+    result = run(
+        df,
+        a.timeframe,
+        a.spread,
+        a.slip,
+        a.commission_r,
+        price_basis=a.price_basis,
+        use_bar_spread=a.use_bar_spread,
+        bar_spread_point_value=a.bar_spread_point_value,
+    )
     t = trades_frame(result)
     if t.empty:
         print("Aucun trade.")
@@ -112,7 +134,7 @@ def main() -> int:
     print("\nLecture : t_stat > 2 sur la période 'depuis' ET 'avant' = signal crédible ; "
           "sinon, c'est du hasard. Seuil de rentabilité : avg_r > 0 après frais.")
 
-    tag = "_sanscouts" if a.spread == 0 and a.slip == 0 and a.commission_r == 0 else ""
+    tag = "_sanscouts" if (not a.use_bar_spread and a.spread == 0 and a.slip == 0 and a.commission_r == 0) else ""
     out = Path("artifacts/backtests/real") / f"EURUSD_{a.timeframe}{tag}"
     out.mkdir(parents=True, exist_ok=True)
     t.to_csv(out / "trades.csv", index=False)
