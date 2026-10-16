@@ -6,9 +6,6 @@ from fastapi import FastAPI
 from apps.api.routers import data_pipeline, features, health, market_data, markets, mt5
 from configs.settings import get_settings
 
-from apps.api.routers import regime
-from apps.api.routers import signals
-from apps.api.routers import risk
 from apps.api.routers import decision
 
 
@@ -36,10 +33,10 @@ def create_app() -> FastAPI:
     app.include_router(market_data.router)
     app.include_router(data_pipeline.router)
     app.include_router(features.router)
-    app.include_router(regime.router)
-    app.include_router(signals.router)
-    app.include_router(decision.router)
-    app.include_router(risk.router)
+    # The canonical decision route is versioned.  It builds a closed-bar
+    # snapshot through the configured broker and ATIPPipeline; it does not use
+    # the legacy fixture-only signal/regime/risk routers.
+    app.include_router(decision.router, prefix="/api/v1")
 
 
     return app

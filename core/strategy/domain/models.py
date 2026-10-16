@@ -3,8 +3,28 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.strategy.domain.enums import SignalType, StrategyID
+from core.strategy.domain.enums import SignalType, StrategyID, StrategyStatus
 from core.regime.domain.enums import TrendRegime
+
+
+class StrategyMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    strategy_id: StrategyID
+    name: str
+    version: str = "1.0.0"
+    description: str
+    status: StrategyStatus = StrategyStatus.ENABLED
+    compatible_regimes: List[str] = Field(default_factory=list)
+    supported_asset_classes: List[str] = Field(
+        default_factory=lambda: ["FOREX"]
+    )
+    supported_timeframes: List[str] = Field(
+        default_factory=lambda: ["M15", "H1", "H4", "D1"]
+    )
+    inspiration: Optional[str] = None
+    parameters: dict = Field(default_factory=dict)
+
 
 
 class StrategySignal(BaseModel):

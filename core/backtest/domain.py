@@ -38,6 +38,11 @@ class VirtualTrade:
     net_result_r: Optional[float] = None
     holding_bars: int = 0
     is_open: bool = True
+    # Risk-engine fields — populated when the trade is created from an
+    # OrderProposal (create_trade_from_order). None when created from a
+    # raw FinalSignal (create_trade_from_signal).
+    volume_lots: Optional[float] = None
+    risk_amount_account_currency: Optional[float] = None
 
 
 @dataclass
@@ -58,6 +63,10 @@ class BacktestConfig:
     risk_per_trade_pct: float = 1.0
     lookback_bars: int = 500
     max_concurrent_trades: int | None = None
+    # Risk sizing mode: "PERCENTAGE" (default) or "FIXED_AMOUNT".
+    # When "FIXED_AMOUNT", fixed_risk_amount must be set.
+    risk_mode: str = "PERCENTAGE"
+    fixed_risk_amount: float | None = None
 
 
 @dataclass
@@ -83,6 +92,14 @@ class BacktestMetrics:
     @property
     def net_r(self) -> float:
         return self.net_result_r
+
+    @property
+    def gross_r(self) -> float:
+        return self.gross_result_r
+
+    @property
+    def max_drawdown(self) -> float:
+        return self.max_drawdown_r
 
     @property
     def win_rate(self) -> float:

@@ -50,3 +50,28 @@ def test_execution_cancelled_if_risk_rejected():
 
     assert result.status == ExecutionStatus.CANCELLED
     assert "Proposal not approved" in result.error_message
+
+
+def test_live_execution_blocked_by_safety_lock():
+    engine = ExecutionEngine(mode=ExecutionMode.LIVE)
+
+    proposal = OrderProposal(
+        symbol="EURUSD",
+        signal_type=SignalType.BUY,
+        strategy_id=StrategyID.TREND_FOLLOWING,
+        volume_lots=0.1,
+        stop_loss=1.0835,
+        take_profit=1.0880,
+        risk_amount_account_currency=100.0,
+        risk_percentage=1.0,
+        timestamp=datetime.now(timezone.utc),
+        status=RiskStatus.APPROVED,
+        reject_reason=RiskRejectReason.NONE,
+    )
+
+    result = engine.process_proposal(proposal, current_price=1.0850)
+
+    assert result.status == ExecutionStatus.FAILED
+    assert result.retcode == -403
+    assert "SAFETY_LOCK" in result.error_message
+    assert "BLOCKED_BY_SAFETY_GUARD_EXECUTION_DISABLED" in result.audit_trail

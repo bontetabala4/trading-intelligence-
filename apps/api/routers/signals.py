@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query
 from datetime import datetime, timezone
 from typing import List
 from core.regime.services.engine import MarketRegimeEngine
-from core.strategy.services.StrategyEngine import StrategyEngine
+from core.strategy.services.engine import StrategyEngine
 from core.strategy.domain.models import StrategySignal
 
 router = APIRouter(prefix="/signals", tags=["Trading Signals"])

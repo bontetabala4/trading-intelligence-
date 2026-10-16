@@ -19,6 +19,9 @@ from core.pipeline import (
     ATIPPipeline,
     MarketSnapshot,
 )
+from core.risk.services.sizer import PositionSizer
+from core.risk.services.engine import RiskEngine
+from core.risk.domain.models import AccountState
 
 
 class BacktestRunner:
@@ -41,14 +44,87 @@ class BacktestRunner:
 
         self.config = config
 
-        # Pipeline canonique unique.
-        self.pipeline = pipeline or ATIPPipeline()
+        if pipeline is None:
+            # Build a PositionSizer that respects the config's risk mode.
+            sizer = PositionSizer(
+                risk_per_trade_pct=config.risk_per_trade_pct / 100.0,
+                risk_mode=config.risk_mode,
+                fixed_risk_amount=config.fixed_risk_amount,
+            )
+            risk_engine = RiskEngine(sizer=sizer)
+            self.pipeline = ATIPPipeline(risk_engine=risk_engine)
+        else:
+            self.pipeline = pipeline
+
+        self.account = AccountState(
+            balance=self.config.initial_capital,
+            equity=self.config.initial_capital,
+            free_margin=self.config.initial_capital,
+            daily_pnl=0.0,
+            open_positions_count=0,
+        )
+        self.pipeline.account = self.account
 
         # Compatibilité legacy uniquement.
         # Aucun appel à cet objet ne doit être effectué.
         self.signal_engine = signal_engine
 
         self.clock = SimulationClock()
+
+    def _reset_account(self) -> None:
+        """Réinitialise le compte au capital initial."""
+        self.account = AccountState(
+            balance=self.config.initial_capital,
+            equity=self.config.initial_capital,
+            free_margin=self.config.initial_capital,
+            daily_pnl=0.0,
+            open_positions_count=0,
+        )
+        self.pipeline.account = self.account
+
+    def _reset_daily_pnl_if_new_day(
+        self,
+        current_ts: datetime,
+        previous_ts: Optional[datetime] = None,
+    ) -> None:
+        """Remet à zéro le daily_pnl si on change de journée calendrier UTC."""
+        if previous_ts is not None and current_ts.date() > previous_ts.date():
+            self.account = AccountState(
+                balance=self.account.balance,
+                equity=self.account.equity,
+                free_margin=self.account.free_margin,
+                daily_pnl=0.0,
+                open_positions_count=self.account.open_positions_count,
+            )
+            self.pipeline.account = self.account
+
+    def _update_account_after_closed_trades(
+        self,
+        closed_trades: List[VirtualTrade],
+        active_trades_count: int = 0,
+    ) -> None:
+        """Met à jour le capital dynamique après la clôture de trades."""
+        new_balance = self.account.balance
+        new_daily_pnl = self.account.daily_pnl
+
+        for trade in closed_trades:
+            risk_amt = trade.risk_amount_account_currency
+            if risk_amt is None:
+                risk_amt = self.pipeline.risk_engine.sizer.get_risk_amount(new_balance)
+            pnl = (trade.net_result_r or 0.0) * risk_amt
+            new_balance += pnl
+            new_daily_pnl += pnl
+
+        self.account = AccountState(
+            balance=new_balance,
+            equity=new_balance,
+            free_margin=new_balance,
+            daily_pnl=new_daily_pnl,
+            open_positions_count=active_trades_count,
+        )
+        self.pipeline.account = self.account
+
+
 
     # ------------------------------------------------------------------
     # Helpers
@@ -188,21 +264,32 @@ class BacktestRunner:
             ),
         )
 
+        self._reset_account()
+
         signals: List[Any] = []
         active_trades: List[VirtualTrade] = []
         completed_trades: List[VirtualTrade] = []
 
         bar_index = 0
+        previous_bar = None
 
         while replay.has_next():
 
             current_bar, history_slice = replay.next_step()
+
+            if previous_bar is not None:
+                self._reset_daily_pnl_if_new_day(
+                    current_bar.timestamp,
+                    previous_bar.timestamp,
+                )
+            previous_bar = current_bar
 
             # ==========================================================
             # 1. Mise à jour des trades déjà ouverts
             # ==========================================================
 
             updated_active: list[VirtualTrade] = []
+            newly_closed: list[VirtualTrade] = []
 
             for trade in active_trades:
 
@@ -218,8 +305,16 @@ class BacktestRunner:
                     updated_active.append(evaluated)
                 else:
                     completed_trades.append(evaluated)
+                    newly_closed.append(evaluated)
 
             active_trades = updated_active
+
+            if newly_closed:
+                self._update_account_after_closed_trades(
+                    newly_closed,
+                    len(active_trades),
+                )
+
 
             # ==========================================================
             # 2. Warm-up

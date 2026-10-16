@@ -34,8 +34,26 @@ class MT5ExecutionAdapter:
                 audit_trail=["PAPER_EXECUTION_SUCCESS"]
             )
 
-        # 2. Mode Live (MetaTrader 5)
+        # 2. Mode Live (MetaTrader 5) — Double verrou de sécurité
+        from configs.settings import get_settings
+
+        if not get_settings().trading_execution_enabled:
+            elapsed_ms = round((time.time() - start_time) * 1000, 2)
+            return ExecutionResult(
+                request=request,
+                status=ExecutionStatus.FAILED,
+                retcode=-403,
+                error_message=(
+                    "SAFETY_LOCK: Real trading execution is strictly disabled "
+                    "(TRADING_EXECUTION_ENABLED=False)."
+                ),
+                timestamp=now,
+                execution_time_ms=elapsed_ms,
+                audit_trail=["BLOCKED_BY_SAFETY_GUARD_EXECUTION_DISABLED"],
+            )
+
         if not self.mt5_client or not getattr(self.mt5_client, "is_connected", False):
+
             elapsed_ms = round((time.time() - start_time) * 1000, 2)
             return ExecutionResult(
                 request=request,

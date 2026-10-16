@@ -19,7 +19,7 @@ from core.regime.services.engine import (
     MarketRegimeEngine,
 )
 
-from core.strategy.services.StrategyEngine import (
+from core.strategy.services.engine import (
     StrategyEngine,
 )
 
@@ -57,6 +57,7 @@ from core.risk.services.engine import (
 
 from core.risk.domain.models import (
     AccountState,
+    OrderProposal,
 )
 
 @dataclass(frozen=True)
@@ -78,6 +79,9 @@ class PipelineResult:
     regime: object
     strategy_signal: Optional[StrategySignal]
     opportunity_result: Optional[OpportunityResult]
+    # OrderProposal produit par le RiskEngine. None si le signal est
+    # NO_TRADE, si l'opportunité a été rejetée ou si le risque a bloqué.
+    risk_proposal: Optional[OrderProposal] = None
 
 
 class ATIPPipeline:
@@ -377,6 +381,7 @@ class ATIPPipeline:
             regime=regime,
             strategy_signal=strategy_signal,
             opportunity_result=opportunity_result,
+            risk_proposal=risk_proposal,
         )
 
     @staticmethod

@@ -70,8 +70,22 @@ class Settings(BaseSettings):
     # collecte massive (même sans risque de trading, c'est un risque de charge/coût).
     data_collection_api_enabled: bool = False
 
+    # --- Notifications ---
+    # The SMTP adapter is opt-in.  Leaving any required value unset keeps
+    # delivery disabled instead of falling back to an implicit destination.
+    notification_email_enabled: bool = False
+    notification_smtp_host: str | None = None
+    notification_smtp_port: int | None = None
+    notification_smtp_username: str | None = None
+    notification_smtp_password: str | None = Field(default=None, repr=False)
+    notification_smtp_from: str | None = None
+    notification_smtp_starttls: bool = True
+
     @field_validator(
-        "mt5_path", "mt5_login", "mt5_password", "mt5_server", mode="before"
+        "mt5_path", "mt5_login", "mt5_password", "mt5_server",
+        "notification_smtp_host", "notification_smtp_port",
+        "notification_smtp_username", "notification_smtp_password",
+        "notification_smtp_from", mode="before"
     )
     @classmethod
     def blank_string_becomes_none(cls, v):

@@ -254,17 +254,11 @@ class SignalEngine:
         risk_engine = RiskEngine()
 
         account_state = AccountState(
-            account_id="ACC_PAPER",
             balance=10000.0,
             equity=10000.0,
-            used_margin=0.0,
             free_margin=10000.0,
-            current_daily_drawdown=0.0,
-            max_daily_drawdown_limit=500.0,
-            max_open_positions=5,
-            current_open_positions=0,
-            active_positions=[],
-            closed_trades_today=[],
+            daily_pnl=0.0,
+            open_positions_count=0,
         )
 
         strat_model_signal = (
