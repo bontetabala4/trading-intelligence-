@@ -21,6 +21,27 @@ class PositionSizer:
                 "risk_mode doit être 'PERCENTAGE' ou 'FIXED_AMOUNT'."
             )
 
+        try:
+            risk_per_trade_pct = float(risk_per_trade_pct)
+            min_lot = float(min_lot)
+            max_lot = float(max_lot)
+            lot_step = float(lot_step)
+            if fixed_risk_amount is not None:
+                fixed_risk_amount = float(fixed_risk_amount)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Les paramètres du PositionSizer doivent être numériques.") from exc
+
+        if not all(math.isfinite(value) for value in (risk_per_trade_pct, min_lot, max_lot, lot_step)):
+            raise ValueError("Les paramètres du PositionSizer doivent être finis.")
+        if min_lot <= 0 or max_lot <= 0 or lot_step <= 0 or min_lot > max_lot:
+            raise ValueError("Les limites de lots et lot_step doivent être positives et cohérentes.")
+        if normalized_mode == "FIXED_AMOUNT" and (
+            fixed_risk_amount is None
+            or not math.isfinite(fixed_risk_amount)
+            or fixed_risk_amount <= 0
+        ):
+            raise ValueError("fixed_risk_amount doit être strictement positif et fini en mode FIXED_AMOUNT.")
+
         if normalized_mode == "PERCENTAGE" and risk_per_trade_pct <= 0:
             raise ValueError(
                 "risk_per_trade_pct doit être strictement positif."
@@ -63,89 +84,92 @@ class PositionSizer:
         pip_size: float = 0.0001,
         pip_value_per_lot: float = 10.0,
     ) -> float:
+        """Calculate a risk-bounded volume, rounded DOWN to a valid lot step.
 
-        if balance <= 0 or sl_distance <= 0:
+        When broker symbol information is supplied, every sizing field must be
+        present and finite. The legacy pip-based fallback is retained only for
+        callers that intentionally omit symbol_info (e.g. legacy Forex tests).
+        """
+        try:
+            balance = float(balance)
+            sl_distance = float(sl_distance)
+            pip_size = float(pip_size)
+            pip_value_per_lot = float(pip_value_per_lot)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+        if not all(
+            math.isfinite(value)
+            for value in (balance, sl_distance, pip_size, pip_value_per_lot)
+        ):
+            return 0.0
+        if balance <= 0 or sl_distance <= 0 or pip_size <= 0 or pip_value_per_lot <= 0:
             return 0.0
 
         risk_amount = self.get_risk_amount(balance)
-
-        if risk_amount <= 0:
+        if not math.isfinite(risk_amount) or risk_amount <= 0:
             return 0.0
 
-        # ==============================================================
-        # MODE MT5 : calcul basé sur les spécifications réelles du symbole
-        # ==============================================================
-
         if symbol_info is not None:
+            # A partially populated SymbolInfo must not silently fall back to
+            # generic lot limits or values that may not match this instrument.
+            if not getattr(symbol_info, "exists", False) or not getattr(symbol_info, "tradable", False):
+                return 0.0
 
-            tick_size = symbol_info.trade_tick_size
-            tick_value = symbol_info.trade_tick_value
+            raw_specs = {
+                "trade_tick_size": getattr(symbol_info, "trade_tick_size", None),
+                "trade_tick_value": getattr(symbol_info, "trade_tick_value", None),
+                "volume_min": getattr(symbol_info, "volume_min", None),
+                "volume_max": getattr(symbol_info, "volume_max", None),
+                "volume_step": getattr(symbol_info, "volume_step", None),
+            }
+            specs: dict[str, float] = {}
+            for name, raw_value in raw_specs.items():
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError, OverflowError):
+                    return 0.0
+                if not math.isfinite(value) or value <= 0:
+                    return 0.0
+                specs[name] = value
 
-            if (
-                tick_size is None
-                or tick_value is None
-                or tick_size <= 0
-                or tick_value <= 0
-            ):
+            tick_size = specs["trade_tick_size"]
+            tick_value = specs["trade_tick_value"]
+            min_lot = specs["volume_min"]
+            max_lot = specs["volume_max"]
+            lot_step = specs["volume_step"]
+            if min_lot > max_lot:
                 return 0.0
 
             ticks = sl_distance / tick_size
             risk_per_lot = ticks * tick_value
-
-            if risk_per_lot <= 0:
-                return 0.0
-
-            raw_lots = risk_amount / risk_per_lot
-
-            min_lot = (
-                symbol_info.volume_min
-                if symbol_info.volume_min is not None
-                else self.min_lot
-            )
-
-            max_lot = (
-                symbol_info.volume_max
-                if symbol_info.volume_max is not None
-                else self.max_lot
-            )
-
-            lot_step = (
-                symbol_info.volume_step
-                if symbol_info.volume_step is not None
-                and symbol_info.volume_step > 0
-                else self.lot_step
-            )
-
-        # ==============================================================
-        # MODE COMPATIBILITÉ
-        # ==============================================================
-
         else:
-
+            # Compatibility path: this assumes the caller is using the
+            # conventional Forex pip-value approximation above.
             sl_pips = sl_distance / pip_size
-            risk_per_pip = sl_pips * pip_value_per_lot
-
-            if risk_per_pip <= 0:
-                return 0.0
-
-            raw_lots = risk_amount / risk_per_pip
-
+            risk_per_lot = sl_pips * pip_value_per_lot
             min_lot = self.min_lot
             max_lot = self.max_lot
             lot_step = self.lot_step
 
-        # ==============================================================
-        # ARRONDI AU PAS INFÉRIEUR
-        # ==============================================================
-
-        steps = math.floor(raw_lots / lot_step)
-
-        calculated_lots = steps * lot_step
-
-        # Évite les erreurs flottantes du type 0.30000000004
-        calculated_lots = round(calculated_lots, 8)
-
-        if calculated_lots < min_lot:
+        if not math.isfinite(risk_per_lot) or risk_per_lot <= 0:
+            return 0.0
+        raw_lots = risk_amount / risk_per_lot
+        if not math.isfinite(raw_lots) or raw_lots <= 0:
             return 0.0
 
-        return min(calculated_lots, max_lot)
+        # The broker's maximum can itself be off-step (e.g. max=0.025,
+        # step=0.01). Cap to the highest volume that both respects max_lot
+        # and lies on the valid step grid, not to max_lot directly.
+        max_steps = math.floor(max_lot / lot_step)
+        if max_steps <= 0:
+            return 0.0
+        steps = min(math.floor(raw_lots / lot_step), max_steps)
+        calculated_lots = round(steps * lot_step, 8)
+
+        if calculated_lots < min_lot or calculated_lots <= 0:
+            return 0.0
+        if calculated_lots > max_lot:
+            # Defensive guard against floating-point representation issues.
+            return 0.0
+        return calculated_lots

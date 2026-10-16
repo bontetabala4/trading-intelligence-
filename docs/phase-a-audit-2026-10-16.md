@@ -67,3 +67,9 @@ Le contrat broker expose maintenant un `MarketQuote` facultatif (Bid/Ask horodat
 Le RiskEngine et les limites refusent désormais un spread absent au lieu de supposer un pip. Les tests historiques qui représentent volontairement un spread simulé le transmettent explicitement. La limite de 60 secondes est une politique prudente codée comme constante ; elle devra être configurée et surveillée lors du déploiement selon le broker et la classe d'actif.
 
 Validation requise après application : tests ciblés, suite complète, `git diff --check`, puis revue de la sortie avant tout commit. Aucune validation n'est présumée avant exécution locale.
+
+## Phase C3 — garde-fous de dimensionnement des positions
+
+Le correctif C3 durcit `PositionSizer` : les entrées numériques non finies ou non positives sont rejetées, un `SymbolInfo` incomplet ne déclenche plus silencieusement les valeurs génériques de lots, et le volume final est plafonné au maximum valide aligné sur le pas du broker. Le fallback pip-based reste disponible uniquement lorsqu'aucun `SymbolInfo` n'est fourni par un chemin historique compatible ; il ne doit pas être utilisé pour dimensionner un instrument non-Forex sans spécifications réelles.
+
+Validation locale requise après application : tests `tests/test_position_sizer.py`, suite complète, puis `git diff --check`. Ce patch n'implique ni validation de rentabilité ni validation des coûts historiques par classe d'actifs.
