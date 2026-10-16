@@ -343,8 +343,17 @@ class BacktestRunner:
             # 4. UNIQUE SOURCE DE DÉCISION
             # ==========================================================
 
+            # Use the backtest cost model (or the bar's broker-point spread)
+            # for risk gating; do not substitute a fixed one-pip spread.
+            spread_points = float(self.config.cost_model.spread_points)
+            if spread_points <= 0 and current_bar.spread is not None:
+                spread_points = float(current_bar.spread)
+            current_spread_price = (
+                spread_points * float(self.config.cost_model.point_value)
+            )
             pipeline_result = self.pipeline.process(
-                snapshot
+                snapshot,
+                current_spread_price=current_spread_price,
             )
 
             signal = pipeline_result.signal

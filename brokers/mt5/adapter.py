@@ -1,10 +1,12 @@
 import logging
+import math
 from datetime import datetime, timezone
 
 from brokers.base.interface import (
     AccountInfo,
     BrokerConnectionError,
     BrokerInterface,
+    MarketQuote,
     OHLCVBar,
     SymbolInfo,
     TerminalInfo,
@@ -155,6 +157,33 @@ class MT5Adapter(BrokerInterface):
                 "Impossible de récupérer les infos du compte MT5."
             )
 
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Risk context is valid only when both account-history and position
+        # queries succeed. None means unavailable; never assume zero positions/PnL.
+        deals = mt5.history_deals_get(day_start, now)
+        positions = mt5.positions_get()
+        open_positions_count = len(positions) if positions is not None else None
+        daily_pnl = None
+        if deals is not None and positions is not None:
+            realized = sum(
+                float(getattr(deal, "profit", 0.0))
+                + float(getattr(deal, "commission", 0.0))
+                + float(getattr(deal, "swap", 0.0))
+                + float(getattr(deal, "fee", 0.0))
+                for deal in deals
+            )
+            floating = sum(
+                float(getattr(position, "profit", 0.0))
+                + float(getattr(position, "swap", 0.0))
+                for position in positions
+            )
+            # Approximation: today's realized deal PnL plus current floating PnL.
+            # A future risk-accounting phase should compare against persisted
+            # start-of-day equity for a stricter intraday drawdown definition.
+            daily_pnl = realized + floating
+
         return AccountInfo(
             login=info.login,
             server=info.server,
@@ -163,6 +192,13 @@ class MT5Adapter(BrokerInterface):
             currency=info.currency,
             leverage=info.leverage,
             trade_allowed=info.trade_allowed,
+            free_margin=(
+                float(info.margin_free)
+                if getattr(info, "margin_free", None) is not None
+                else None
+            ),
+            daily_pnl=daily_pnl,
+            open_positions_count=open_positions_count,
         )
 
     def list_symbols(self) -> list[str]:
@@ -205,6 +241,39 @@ class MT5Adapter(BrokerInterface):
             volume_max=info.volume_max,
             volume_step=info.volume_step,
             trade_contract_size=info.trade_contract_size,
+        )
+
+    def get_current_quote(self, symbol: str) -> MarketQuote | None:
+        """Return the latest valid MT5 bid/ask tick, if available."""
+        mt5 = _load_mt5()
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return None
+
+        try:
+            bid = float(tick.bid)
+            ask = float(tick.ask)
+            time_msc = getattr(tick, "time_msc", None)
+            if time_msc is not None and float(time_msc) > 0:
+                timestamp = datetime.fromtimestamp(float(time_msc) / 1000.0, tz=timezone.utc)
+            else:
+                tick_time = getattr(tick, "time", None)
+                if tick_time is None or float(tick_time) <= 0:
+                    return None
+                timestamp = datetime.fromtimestamp(float(tick_time), tz=timezone.utc)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+            return None
+
+        if not math.isfinite(bid) or not math.isfinite(ask):
+            return None
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return None
+
+        return MarketQuote(
+            symbol=symbol.upper(),
+            bid=bid,
+            ask=ask,
+            timestamp=timestamp,
         )
 
     def get_ohlcv(

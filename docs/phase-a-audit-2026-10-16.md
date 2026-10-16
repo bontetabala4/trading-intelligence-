@@ -1,7 +1,7 @@
 # ATIP — Audit technique Phase A
 
-**Date :** 16 octobre 2026  
-**Branche :** `feat/atip-product-build`  
+**Date :** 16 octobre 2026
+**Branche :** `feat/atip-product-build`
 **Dépôt :** `bontetabala4/trading-intelligence-`
 
 ## Validation initiale rapportée
@@ -42,3 +42,28 @@ python -m pytest tests/ --cov=core --cov=brokers --cov-report=term-missing
 ```
 
 Le correctif ne doit être considéré comme validé qu'après succès réel de ces commandes. Les prochaines priorités sont le contrat du Risk Engine (compte, spread et spécifications du symbole explicites), l'unification des chemins de paper trading, puis l'authentification, le Web produit, le mobile, l'IA d'assistance et la CI.
+
+## Phase C1 — durcissement du contexte de risque (patch local)
+
+Le patch ajoute des champs explicites `free_margin`, `daily_pnl` et `open_positions_count` au contrat de compte. Le mock les fournit comme données synthétiques ; l'adaptateur MT5 les fournit lorsque les requêtes du compte, de l'historique et des positions réussissent. Le calcul MT5 de `daily_pnl` est une approximation (transactions depuis minuit UTC + PnL flottant courant), à remplacer ensuite par une mesure de drawdown basée sur l'equity au début de journée.
+
+Le pipeline ne crée plus par défaut un compte fictif de 10 000. Le chemin API transmet le compte, les spécifications du symbole et le spread dérivé des points du broker ; si le contexte requis est incomplet, le moteur produit une proposition rejetée `MISSING_RISK_INPUTS`, qui force `NO_TRADE`. Le backtest transmet le spread du modèle de coûts ou celui de la bougie. Les spécifications mock restent des fixtures synthétiques et ne sont pas des conditions réelles de broker.
+
+Validation locale requise après application :
+
+```bash
+python -m pytest tests/unit/test_risk_context_safety.py tests/test_risk_engine.py tests/unit/test_decision_service.py -v
+python -m pytest tests/ -v
+git diff --check
+git diff --stat
+```
+
+Ce document est mis à jour par le patch ; aucune validation post-patch n'est présumée avant l'exécution de ces commandes.
+
+## Phase C2 — cotation actuelle et spread explicite (patch local)
+
+Le contrat broker expose maintenant un `MarketQuote` facultatif (Bid/Ask horodatés). L'adaptateur MT5 lit le tick courant ; le mock expose uniquement une cotation synthétique de test. Le service de décision ignore les cotations absentes, invalides, sans fuseau horaire, trop anciennes (>60 secondes) ou excessivement futures (>5 secondes). Le pipeline strict rejette un contexte sans cotation récente et ancre les propositions BUY sur l'Ask et SELL sur le Bid. Le spread des bougies historiques n'est plus utilisé comme substitut au spread courant dans la décision API.
+
+Le RiskEngine et les limites refusent désormais un spread absent au lieu de supposer un pip. Les tests historiques qui représentent volontairement un spread simulé le transmettent explicitement. La limite de 60 secondes est une politique prudente codée comme constante ; elle devra être configurée et surveillée lors du déploiement selon le broker et la classe d'actif.
+
+Validation requise après application : tests ciblés, suite complète, `git diff --check`, puis revue de la sortie avant tout commit. Aucune validation n'est présumée avant exécution locale.

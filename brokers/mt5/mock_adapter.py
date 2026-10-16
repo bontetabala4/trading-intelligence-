@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from brokers.base.interface import (
     AccountInfo,
     BrokerInterface,
+    MarketQuote,
     OHLCVBar,
     SymbolInfo,
     TerminalInfo,
@@ -31,6 +32,20 @@ _KNOWN_SYMBOLS = {
     "SPX500": ("indices", 5800.0),
     "BTCUSD": ("crypto", 62000.0),
     "ETHUSD": ("crypto", 2600.0),
+}
+
+# Synthetic specs are deterministic test fixtures only; they do not describe a live broker.
+_MOCK_SYMBOL_SPECS = {
+    "EURUSD": (5, 0.00001, 0.00001, 1.0, 100000.0),
+    "GBPUSD": (5, 0.00001, 0.00001, 1.0, 100000.0),
+    "USDJPY": (3, 0.001, 0.001, 0.67, 100000.0),
+    "XAUUSD": (2, 0.01, 0.01, 1.0, 100.0),
+    "XAGUSD": (3, 0.001, 0.001, 0.5, 5000.0),
+    "NAS100": (2, 0.01, 0.01, 1.0, 1.0),
+    "US30": (1, 0.1, 0.1, 1.0, 1.0),
+    "SPX500": (1, 0.1, 0.1, 1.0, 1.0),
+    "BTCUSD": (2, 0.01, 0.01, 1.0, 1.0),
+    "ETHUSD": (2, 0.01, 0.01, 1.0, 1.0),
 }
 
 _TIMEFRAME_MINUTES = {
@@ -75,6 +90,9 @@ class MockMT5Adapter(BrokerInterface):
             currency="USD",
             leverage=100,
             trade_allowed=False,
+            free_margin=10_000.0,
+            daily_pnl=0.0,
+            open_positions_count=0,
         )
 
     def list_symbols(self) -> list[str]:
@@ -84,14 +102,37 @@ class MockMT5Adapter(BrokerInterface):
         if symbol not in _KNOWN_SYMBOLS:
             return SymbolInfo(symbol=symbol, exists=False, tradable=False)
         asset_class, _ = _KNOWN_SYMBOLS[symbol]
+        digits, point, tick_size, tick_value, contract_size = _MOCK_SYMBOL_SPECS[symbol]
         return SymbolInfo(
             symbol=symbol,
             exists=True,
             tradable=True,
-            description=f"Mock {symbol} ({asset_class})",
+            description=f"Mock {symbol} ({asset_class}; synthetic specs)",
             currency_base=symbol[:3],
             currency_quote=symbol[3:6] if len(symbol) >= 6 else "USD",
-            digits=5,
+            digits=digits,
+            point=point,
+            trade_tick_size=tick_size,
+            trade_tick_value=tick_value,
+            volume_min=0.01,
+            volume_max=100.0,
+            volume_step=0.01,
+            trade_contract_size=contract_size,
+        )
+
+    def get_current_quote(self, symbol: str) -> MarketQuote | None:
+        """Return a synthetic quote for testing; never represents a live market feed."""
+        key = symbol.upper()
+        if key not in _KNOWN_SYMBOLS:
+            return None
+        _, mid = _KNOWN_SYMBOLS[key]
+        _, point, _, _, _ = _MOCK_SYMBOL_SPECS[key]
+        spread_price = 10.0 * point
+        return MarketQuote(
+            symbol=key,
+            bid=mid - spread_price / 2.0,
+            ask=mid + spread_price / 2.0,
+            timestamp=datetime.now(timezone.utc),
         )
 
     def get_ohlcv(
@@ -170,7 +211,8 @@ class MockMT5Adapter(BrokerInterface):
             low=round(low, 5),
             close=round(close, 5),
             volume=tick_vol,
-            spread=round(rng.uniform(0.5, 2.5), 2),
+            # Spread is emitted in broker points, matching the MT5 adapter.
+            spread=round(rng.uniform(5.0, 25.0), 2),
             tick_volume=tick_vol,
             real_volume=None,  # Le Mock ne simule pas de volume réel — cohérent avec le Forex/CFD réel.
         )

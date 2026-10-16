@@ -6,17 +6,20 @@ Aucune logique BUY/SELL parallèle ici.
 """
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from brokers.base.interface import BrokerInterface, Timeframe
+from brokers.base.interface import BrokerConnectionError, BrokerInterface, MarketQuote, SymbolInfo, Timeframe
 from configs.settings import Settings, get_settings
 from core.market.selection import AssetClass
 from core.pipeline import ATIPPipeline, PipelineResult
 from core.market.snapshot import MarketSnapshot
+from core.risk.domain.models import AccountState
 from database.models import DecisionRecord
 from database.repositories.decision_repository import DecisionRecordRepository
 from pydantic import BaseModel
@@ -25,13 +28,44 @@ class DecisionServiceError(RuntimeError):
     """Impossible de produire une décision (broker, données, etc.)."""
 
 
-def build_pipeline_snapshot(
+MAX_CURRENT_QUOTE_AGE_SECONDS = 60.0
+MAX_FUTURE_QUOTE_SECONDS = 5.0
+
+
+def _usable_current_quote(
+    quote: MarketQuote | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[float, float] | None:
+    """Return (bid, ask) only for a valid, timezone-aware, recent quote."""
+    if quote is None:
+        return None
+    instant = now or datetime.now(timezone.utc)
+    try:
+        timestamp = quote.timestamp
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            return None
+        bid = float(quote.bid)
+        ask = float(quote.ask)
+        age_seconds = (instant - timestamp.astimezone(timezone.utc)).total_seconds()
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(bid) or not math.isfinite(ask):
+        return None
+    if bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    if age_seconds > MAX_CURRENT_QUOTE_AGE_SECONDS or age_seconds < -MAX_FUTURE_QUOTE_SECONDS:
+        return None
+    return bid, ask
+
+
+def _build_pipeline_inputs(
     symbol: str,
     asset_class: AssetClass,
     timeframe: Timeframe,
     broker: BrokerInterface,
     lookback: int = 500,
-) -> MarketSnapshot:
+) -> tuple[MarketSnapshot, SymbolInfo]:
     if not broker.is_connected():
         raise DecisionServiceError(
             "Broker non connecté — impossible de construire un snapshot pipeline."
@@ -41,26 +75,34 @@ def build_pipeline_snapshot(
     if not info.exists:
         raise DecisionServiceError(f"Symbole inconnu chez le broker : {symbol}")
 
-    bars = broker.get_closed_ohlcv(
-        symbol.upper(),
-        timeframe,
-        count=lookback,
-    )
+    bars = broker.get_closed_ohlcv(symbol.upper(), timeframe, count=lookback)
     if not bars:
         raise DecisionServiceError(
             f"Aucune bougie pour {symbol}/{timeframe.value}."
         )
 
     ordered = tuple(sorted(bars, key=lambda bar: bar.timestamp))
-    timestamp = ordered[-1].timestamp
-
-    return MarketSnapshot(
+    snapshot = MarketSnapshot(
         symbol=symbol.upper(),
         asset_class=asset_class,
         timeframe=timeframe,
-        timestamp=timestamp,
+        timestamp=ordered[-1].timestamp,
         bars=ordered,
     )
+    return snapshot, info
+
+
+def build_pipeline_snapshot(
+    symbol: str,
+    asset_class: AssetClass,
+    timeframe: Timeframe,
+    broker: BrokerInterface,
+    lookback: int = 500,
+) -> MarketSnapshot:
+    snapshot, _ = _build_pipeline_inputs(
+        symbol, asset_class, timeframe, broker, lookback
+    )
+    return snapshot
 
 
 def run_decision(
@@ -71,16 +113,75 @@ def run_decision(
     pipeline: ATIPPipeline | None = None,
     lookback: int = 500,
 ) -> PipelineResult:
-    snapshot = build_pipeline_snapshot(
+    snapshot, symbol_info = _build_pipeline_inputs(
         symbol=symbol,
         asset_class=asset_class,
         timeframe=timeframe,
         broker=broker,
         lookback=lookback,
     )
-    engine = pipeline or ATIPPipeline()
-    return engine.process(snapshot)
 
+    # A decision may still explain the market when risk information is missing,
+    # but it must become NO_TRADE rather than inventing capital/positions/PnL.
+    account_state = None
+    try:
+        broker_account = broker.get_account_info()
+    except BrokerConnectionError:
+        broker_account = None
+
+    if broker_account is not None and all(
+        value is not None
+        for value in (
+            broker_account.free_margin,
+            broker_account.daily_pnl,
+            broker_account.open_positions_count,
+        )
+    ):
+        try:
+            account_state = AccountState(
+                balance=float(broker_account.balance),
+                equity=float(broker_account.equity),
+                free_margin=float(broker_account.free_margin),
+                daily_pnl=float(broker_account.daily_pnl),
+                open_positions_count=int(broker_account.open_positions_count),
+            )
+        except (TypeError, ValueError):
+            account_state = None
+
+    # A historical candle spread is not a live quote. Use only a recent broker tick;
+    # missing/invalid/stale quotes are passed as missing and force NO_TRADE in strict mode.
+    try:
+        broker_quote = broker.get_current_quote(symbol.upper())
+    except BrokerConnectionError:
+        broker_quote = None
+    usable_quote = _usable_current_quote(broker_quote)
+
+    current_bid = None
+    current_ask = None
+    current_spread_price = None
+    current_spread_pips = None
+    if usable_quote is not None:
+        current_bid, current_ask = usable_quote
+        current_spread_price = current_ask - current_bid
+        if asset_class.value.lower() == "forex" and symbol_info.point is not None:
+            point = float(symbol_info.point)
+            if point > 0 and symbol_info.digits is not None:
+                pip_multiplier = 10 if symbol_info.digits in (3, 5) else 1
+                pip_size = point * pip_multiplier
+                if pip_size > 0:
+                    current_spread_pips = current_spread_price / pip_size
+
+    engine = pipeline or ATIPPipeline()
+    return engine.process(
+        snapshot,
+        symbol_info=symbol_info,
+        account=account_state,
+        current_spread_pips=current_spread_pips,
+        current_spread_price=current_spread_price,
+        current_bid=current_bid,
+        current_ask=current_ask,
+        require_explicit_risk_inputs=True,
+    )
 
 def persist_decision(
     db: Session,

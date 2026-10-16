@@ -23,7 +23,7 @@ def test_risk_engine_approval():
 
     account = AccountState(balance=10000.0, equity=10000.0, free_margin=10000.0)
 
-    proposal = engine.evaluate_signal(signal, account, current_price=1.0850)
+    proposal = engine.evaluate_signal(signal, account, current_price=1.0850, current_spread_pips=1.0)
 
     assert proposal.status == RiskStatus.APPROVED
     # 1% de 10 000$ = 100$ de risque. 15 pips * 10$/pip = 150$ de risque par lot. 100 / 150 = 0.66 lot
@@ -47,7 +47,7 @@ def test_risk_engine_rejection_daily_drawdown():
     # Perte de 600$ sur un compte de 10k$ (> 5% max drawdown)
     account = AccountState(balance=10000.0, equity=9400.0, free_margin=9400.0, daily_pnl=-600.0)
 
-    proposal = engine.evaluate_signal(signal, account, current_price=1.0850)
+    proposal = engine.evaluate_signal(signal, account, current_price=1.0850, current_spread_pips=1.0)
 
     assert proposal.status == RiskStatus.REJECTED
     assert proposal.reject_reason == RiskRejectReason.MAX_DAILY_DRAWDOWN_REACHED
@@ -85,8 +85,8 @@ def test_risk_engine_fixed_amount_uses_fixed_risk_contract():
         signal,
         account,
         current_price=1.0850,
+        current_spread_pips=1.0,
     )
-
     assert proposal.status == RiskStatus.APPROVED
     assert proposal.risk_amount_account_currency == 100.0
     assert proposal.risk_percentage == 0.0

@@ -1,3 +1,4 @@
+import math
 # core/pipeline.py
 
 from dataclasses import dataclass
@@ -141,18 +142,20 @@ class ATIPPipeline:
             risk_engine or RiskEngine()
         )
 
-        self.account = account or AccountState(
-            balance=10_000.0,
-            equity=10_000.0,
-            free_margin=10_000.0,
-            daily_pnl=0.0,
-            open_positions_count=0,
-        )
+        # No fabricated capital/account state. Backtests must inject their
+        # simulated account; the API must inject broker account/risk context.
+        self.account = account
 
     def process(
         self,
         snapshot: MarketSnapshot,
         symbol_info=None,
+        account: Optional[AccountState] = None,
+        current_spread_pips: float | None = None,
+        current_spread_price: float | None = None,
+        current_bid: float | None = None,
+        current_ask: float | None = None,
+        require_explicit_risk_inputs: bool = False,
     ) -> PipelineResult:
 
         # ==============================================================
@@ -337,17 +340,53 @@ class ATIPPipeline:
         risk_proposal = None
 
         if opportunity_result.status == ValidationStatus.VALID:
-
             current_price = snapshot.bars[-1].close
+            if current_bid is not None and current_ask is not None:
+                # Risk levels must be anchored to the executable side of the quote.
+                current_spread_price = float(current_ask) - float(current_bid)
+                if strategy_signal.signal == SignalType.BUY:
+                    current_price = float(current_ask)
+                elif strategy_signal.signal == SignalType.SELL:
+                    current_price = float(current_bid)
 
-            risk_proposal = self.risk_engine.evaluate_signal(
-                signal=strategy_signal,
-                account=self.account,
-                current_price=current_price,
-                current_spread_pips=1.0,
-                evaluation_timestamp=snapshot.timestamp,
-                symbol_info=symbol_info,
-            )
+            risk_account = account if account is not None else self.account
+            missing_inputs: list[str] = []
+            if risk_account is None:
+                missing_inputs.append("ACCOUNT_STATE")
+            if current_spread_pips is None and current_spread_price is None:
+                missing_inputs.append("SPREAD")
+            if require_explicit_risk_inputs and symbol_info is None:
+                missing_inputs.append("SYMBOL_INFO")
+            if require_explicit_risk_inputs:
+                    try:
+                        bid_value = float(current_bid)
+                        ask_value = float(current_ask)
+                        quote_is_valid = (
+                            math.isfinite(bid_value)
+                            and math.isfinite(ask_value)
+                            and bid_value > 0
+                            and ask_value >= bid_value
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        quote_is_valid = False
+                    if not quote_is_valid:
+                        missing_inputs.append("CURRENT_QUOTE")
+
+            if missing_inputs:
+                risk_proposal = self.risk_engine.reject_missing_risk_inputs(
+                    strategy_signal, snapshot.timestamp, missing_inputs
+                )
+            else:
+                risk_proposal = self.risk_engine.evaluate_signal(
+                    signal=strategy_signal,
+                    account=risk_account,
+                    current_price=current_price,
+                    current_spread_pips=current_spread_pips,
+                    current_spread_price=current_spread_price,
+                    evaluation_timestamp=snapshot.timestamp,
+                    symbol_info=symbol_info,
+                    require_symbol_info=require_explicit_risk_inputs,
+                )
 
         # ==============================================================
         # 9. FINAL SIGNAL

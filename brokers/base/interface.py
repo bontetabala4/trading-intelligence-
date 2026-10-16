@@ -24,6 +24,7 @@ class OHLCVBar:
     low: float
     close: float
     volume: float
+    # Broker spread in points (MT5 MqlRates.spread units), not pips or price.
     spread: float | None = None
     # Étape 2 : MT5 distingue tick_volume (nombre de variations de prix) et
     # real_volume (volume réel, souvent absent en Forex/CFD — reste NULL en
@@ -31,6 +32,16 @@ class OHLCVBar:
     # tick_volume pour ne pas casser le chemin Étape 1 (MarketObserver).
     tick_volume: float | None = None
     real_volume: float | None = None
+
+
+@dataclass(frozen=True)
+class MarketQuote:
+    """Instantaneous broker quote; timestamp must be timezone-aware (UTC)."""
+
+    symbol: str
+    bid: float
+    ask: float
+    timestamp: datetime
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,11 @@ class AccountInfo:
     currency: str
     leverage: int
     trade_allowed: bool
+    # None means the broker could not provide a trustworthy value. Risk
+    # evaluation must not replace a missing value with a fabricated default.
+    free_margin: float | None = None
+    daily_pnl: float | None = None
+    open_positions_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +152,10 @@ class BrokerInterface(ABC):
     @abstractmethod
     def get_symbol_info(self, symbol: str) -> SymbolInfo:
         """Vérifie l'existence et la tradabilité d'un symbole."""
+
+    def get_current_quote(self, symbol: str) -> MarketQuote | None:
+        """Return a current bid/ask quote, or None if the adapter cannot provide one."""
+        return None
 
     @abstractmethod
     def get_ohlcv(
