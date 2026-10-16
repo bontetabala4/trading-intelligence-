@@ -166,16 +166,35 @@ class VirtualOutcomeEngine:
             current_bar, effective_spread_price
         )
 
+        # A realistic stop fill needs the bar OPEN. OHLCV bars from the
+        # repository provide it; do not silently ignore missing open prices.
+        try:
+            open_price = float(current_bar.open)
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Le prix open de la bougie est requis pour simuler les gaps.") from exc
+        bid_open, ask_open = cost_model.bid_ask_from_price(
+            open_price, effective_spread_price
+        )
+
         # A long closes on Bid; a short closes on Ask. Stops/targets are
-        # tested on the executable quote side rather than the raw candle side.
+        # evaluated on executable sides, not on a generic OHLC price.
         if is_long:
             stop_hit = bid_low <= trade.stop_reference
             target_hit = bid_high >= trade.target_reference
+            gap_through_stop = bid_open < trade.stop_reference
         else:
             stop_hit = ask_high >= trade.stop_reference
             target_hit = ask_low <= trade.target_reference
- 
-        if stop_hit and target_hit:
+            gap_through_stop = ask_open > trade.stop_reference
+
+        # If the market opens beyond the stop, the stop cannot be assumed to
+        # fill at its requested level. Use the executable opening quote,
+        # then apply adverse configured slippage below.
+        if gap_through_stop:
+            raw_exit_price = bid_open if is_long else ask_open
+            exit_reason = ExitReason.GAP_STOP_HIT
+        elif stop_hit and target_hit:
+            # Intrabar order is unknown from OHLC alone: use conservative stop-first.
             raw_exit_price = trade.stop_reference
             exit_reason = ExitReason.AMBIGUOUS_BAR_STOP_HIT
         elif stop_hit:

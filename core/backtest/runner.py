@@ -1,5 +1,6 @@
 
 from datetime import datetime, timezone
+import math
 from typing import Any, List, Optional
 
 from brokers.base.interface import OHLCVBar, Timeframe
@@ -70,9 +71,11 @@ class BacktestRunner:
         self.signal_engine = signal_engine
 
         self.clock = SimulationClock()
+        self._account_depleted = False
 
     def _reset_account(self) -> None:
         """Réinitialise le compte au capital initial."""
+        self._account_depleted = False
         self.account = AccountState(
             balance=self.config.initial_capital,
             equity=self.config.initial_capital,
@@ -103,28 +106,51 @@ class BacktestRunner:
         closed_trades: List[VirtualTrade],
         active_trades_count: int = 0,
     ) -> None:
-        """Met à jour le capital dynamique après la clôture de trades."""
+        """Apply realized PnL without allowing simulated equity below zero.
+
+        If a gap loss consumes the remaining capital, mark the account depleted.
+        The runner will stop at that bar and include a warning in BacktestResult.
+        AccountState currently requires a strictly positive balance, so 1e-9 is
+        used only as an internal sentinel after depletion; it is not capital.
+        """
         new_balance = self.account.balance
         new_daily_pnl = self.account.daily_pnl
 
         for trade in closed_trades:
+            if new_balance <= 0:
+                self._account_depleted = True
+                break
             risk_amt = trade.risk_amount_account_currency
             if risk_amt is None:
                 risk_amt = self.pipeline.risk_engine.sizer.get_risk_amount(new_balance)
             pnl = (trade.net_result_r or 0.0) * risk_amt
-            new_balance += pnl
-            new_daily_pnl += pnl
+            if not math.isfinite(pnl):
+                # NaN/Inf signals invalid simulation data, not a genuine
+                # market loss. Fail explicitly instead of fabricating ruin.
+                raise ValueError(
+                    "PnL simulé non fini pour le trade "
+                    f"{trade.trade_id}; backtest interrompu."
+                )
 
+            # A limited-liability simulated account cannot lose more than its
+            # remaining balance. Preserve that cap and stop the replay if hit.
+            applied_pnl = max(pnl, -new_balance)
+            new_balance += applied_pnl
+            new_daily_pnl += applied_pnl
+            if new_balance <= 0:
+                new_balance = 0.0
+                self._account_depleted = True
+                break
+
+        stored_balance = 1e-9 if self._account_depleted else new_balance
         self.account = AccountState(
-            balance=new_balance,
-            equity=new_balance,
-            free_margin=new_balance,
+            balance=stored_balance,
+            equity=stored_balance,
+            free_margin=stored_balance,
             daily_pnl=new_daily_pnl,
             open_positions_count=active_trades_count,
         )
         self.pipeline.account = self.account
-
-
 
     # ------------------------------------------------------------------
     # Helpers
@@ -244,6 +270,7 @@ class BacktestRunner:
             raise ValueError(
                 f"Invalid dataset: {', '.join(errors)}"
             )
+        run_warnings = list(errors)
 
         timeframe = self._resolve_timeframe(
             self.config.timeframe
@@ -272,10 +299,12 @@ class BacktestRunner:
 
         bar_index = 0
         previous_bar = None
+        last_processed_bar = normalized_bars[0]
 
         while replay.has_next():
 
             current_bar, history_slice = replay.next_step()
+            last_processed_bar = current_bar
             spread_price = self.config.cost_model.spread_price_for_bar(current_bar)
 
             if previous_bar is not None:
@@ -317,6 +346,13 @@ class BacktestRunner:
                     len(active_trades),
                 )
 
+            if self._account_depleted:
+                run_warnings.append(
+                    "ACCOUNT_DEPLETED: replay stopped at "
+                    f"{current_bar.timestamp.isoformat()} because simulated losses "
+                    "exhausted the available capital; later bars were not simulated."
+                )
+                break
 
             # ==========================================================
             # 2. Warm-up
@@ -407,10 +443,9 @@ class BacktestRunner:
         )
 
         first_bar = normalized_bars[0]
-        last_bar = normalized_bars[-1]
 
         start_ts = first_bar.timestamp
-        end_ts = last_bar.timestamp
+        end_ts = last_processed_bar.timestamp
 
         return BacktestResult(
             run_id=(
@@ -424,5 +459,5 @@ class BacktestRunner:
             signals=signals,
             trades=all_trades,
             metrics=metrics,
-            warnings=errors,
+            warnings=run_warnings,
         )

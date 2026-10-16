@@ -330,3 +330,65 @@ def test_fixed_risk_amount_remains_constant_after_capital_growth():
     assert runner.pipeline.risk_engine.sizer.get_risk_amount(10_000.0) == 100.0
     assert runner.pipeline.risk_engine.sizer.get_risk_amount(10_200.0) == 100.0
     assert runner.pipeline.risk_engine.sizer.get_risk_amount(20_000.0) == 100.0
+
+
+def test_account_depletion_caps_loss_and_marks_runner_for_halt():
+    runner = _make_runner()
+    catastrophic_gap_trade = _make_closed_trade(
+        net_result_r=-2_000.0,
+        risk_amount=100.0,
+    )
+
+    runner._update_account_after_closed_trades(
+        [catastrophic_gap_trade],
+        active_trades_count=0,
+    )
+
+    assert runner._account_depleted is True
+    # AccountState requires balance > 0; this is a technical sentinel only.
+    assert runner.account.balance == 1e-9
+    assert runner.account.equity == 1e-9
+    assert runner.account.free_margin == 1e-9
+    # The loss charged to equity is capped to the remaining 10,000 account balance.
+    assert runner.account.daily_pnl == -10_000.0
+
+
+def test_account_depletion_is_not_reversed_by_a_later_trade_in_same_batch():
+    runner = _make_runner()
+    catastrophic_loss = _make_closed_trade(
+        net_result_r=-2_000.0,
+        risk_amount=100.0,
+    )
+    later_winner = _make_closed_trade(
+        net_result_r=2.0,
+        risk_amount=100.0,
+    )
+
+    runner._update_account_after_closed_trades(
+        [catastrophic_loss, later_winner],
+        active_trades_count=0,
+    )
+
+    assert runner._account_depleted is True
+    assert runner.account.balance == 1e-9
+    assert runner.account.daily_pnl == -10_000.0
+
+def test_nonfinite_trade_pnl_fails_explicitly_without_fabricating_ruin():
+    import pytest
+
+    runner = _make_runner()
+    invalid_trade = _make_closed_trade(
+        net_result_r=float("nan"),
+        risk_amount=100.0,
+    )
+
+    with pytest.raises(ValueError, match="PnL simulé non fini"):
+        runner._update_account_after_closed_trades(
+            [invalid_trade],
+            active_trades_count=0,
+        )
+
+    # Invalid results must not be silently recorded as a total account loss.
+    assert runner._account_depleted is False
+    assert runner.account.balance == 10_000.0
+    assert runner.account.daily_pnl == 0.0

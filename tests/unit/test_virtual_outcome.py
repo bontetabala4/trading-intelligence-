@@ -52,8 +52,14 @@ def make_bar(
     high,
     low,
     timestamp=None,
+    open_price=None,
 ):
+    # Legacy test bars that do not specify an open are deliberately kept
+    # away from gap conditions by choosing an in-range midpoint.
+    if open_price is None:
+        open_price = (float(high) + float(low)) / 2.0
     return SimpleNamespace(
+        open=open_price,
         high=high,
         low=low,
         timestamp=timestamp

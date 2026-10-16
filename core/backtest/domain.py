@@ -12,6 +12,7 @@ from core.signal.domain import FinalSignal
 
 class ExitReason(str, Enum):
     STOP_HIT = "STOP_HIT"
+    GAP_STOP_HIT = "GAP_STOP_HIT"
     TARGET_HIT = "TARGET_HIT"
     AMBIGUOUS_BAR_STOP_HIT = "AMBIGUOUS_BAR_STOP_HIT"
     TIME_EXIT = "TIME_EXIT"
